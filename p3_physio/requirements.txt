@@ -14,9 +14,6 @@ einops>=0.7.0            # Tensor rearrangement
 # mamba-ssm>=1.2.0       # Uncomment if on GPU with CUDA 11.8+
 # causal-conv1d>=1.1.0
 
-# rPPG signal extraction
-rppg-toolbox>=0.1.0      # CHROM, POS, DeepPhys methods
-
 # Face analysis
 mediapipe>=0.10.9        # FaceMesh, iris tracking, EAR blink detection
 opencv-python>=4.8.0     # Video I/O, image processing
