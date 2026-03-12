@@ -176,11 +176,11 @@ def run_analysis(rppg_real_path, rppg_fake_path, blink_real_path, blink_fake_pat
             "blink_fake_n": len(blink_fake),
         })
         print(f"\n[Trackio] Metrics logged to project 'p3_physio_deepfake'")
-    else:
-        # Save to CSV fallback
-        metrics_df = pd.DataFrame([all_metrics])
-        metrics_df.to_csv(out_dir / "w1_analysis_metrics.csv", index=False)
-        print(f"\n[Local] Metrics saved → {out_dir / 'w1_analysis_metrics.csv'}")
+
+    # Save to CSV fallback
+    metrics_df = pd.DataFrame([all_metrics])
+    metrics_df.to_csv(out_dir / "w1_analysis_metrics.csv", index=False)
+    print(f"\n[Local] Metrics saved → {out_dir / 'w1_analysis_metrics.csv'}")
 
     return all_metrics
 
