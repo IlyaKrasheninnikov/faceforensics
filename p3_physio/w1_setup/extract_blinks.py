@@ -27,26 +27,66 @@ from scipy.stats import entropy as scipy_entropy
 from tqdm import tqdm
 
 # ─── MediaPipe compatibility shim ─────────────────────────────────────────────
+# Priority: mp_legacy (solutions API, mp<=0.10.3) → mp_tasks (Tasks API, mp>=0.10)
+#           → opencv (brightness fallback, last resort)
 _FACE_BACKEND = None
-_mp_face_mesh_cls = None
+_mp_face_mesh_cls = None      # used by mp_legacy
+_mp_landmarker_opts = None    # used by mp_tasks
 
 
 def _init_face_backend():
-    global _FACE_BACKEND, _mp_face_mesh_cls
+    global _FACE_BACKEND, _mp_face_mesh_cls, _mp_landmarker_opts
+
+    # 1) Try legacy solutions API (mediapipe <= 0.10.3)
     try:
         import mediapipe as mp
-        _ = mp.solutions.face_mesh.FaceMesh
+        _ = mp.solutions.face_mesh.FaceMesh  # raises AttributeError on new API
         _mp_face_mesh_cls = mp.solutions.face_mesh
         _FACE_BACKEND = "mp_legacy"
         print("[FaceBackend] MediaPipe legacy solutions API")
+        return
     except Exception:
-        _FACE_BACKEND = "opencv"
-        print("[FaceBackend] MediaPipe solutions unavailable — blink via eye-region heuristic")
+        pass
+
+    # 2) Try new Tasks API (mediapipe >= 0.10 on Kaggle/Colab)
+    try:
+        import mediapipe as mp
+        from mediapipe.tasks import python as mp_python
+        from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions, RunningMode
+
+        # Download the face landmarker model if not already cached
+        import urllib.request, os, tempfile
+        model_path = os.path.join(tempfile.gettempdir(), "face_landmarker.task")
+        if not os.path.exists(model_path):
+            print("[FaceBackend] Downloading MediaPipe face_landmarker.task model (~3MB)...")
+            urllib.request.urlretrieve(
+                "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                model_path,
+            )
+
+        base_opts = mp_python.BaseOptions(model_asset_path=model_path)
+        _mp_landmarker_opts = FaceLandmarkerOptions(
+            base_options=base_opts,
+            running_mode=RunningMode.IMAGE,
+            num_faces=1,
+            min_face_detection_confidence=0.5,
+            min_face_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        _FACE_BACKEND = "mp_tasks"
+        print("[FaceBackend] MediaPipe Tasks API (FaceLandmarker)")
+        return
+    except Exception as e:
+        print(f"[FaceBackend] MediaPipe Tasks unavailable ({e}) — falling back to brightness heuristic")
+
+    # 3) Last resort: brightness proxy
+    _FACE_BACKEND = "opencv"
+    print("[FaceBackend] Using fixed eye-region brightness heuristic")
 
 
 _init_face_backend()
 
-# MediaPipe 468-landmark indices for left and right eyes
+# MediaPipe 478-landmark indices for left and right eyes (same for both APIs)
 LEFT_EYE_IDS  = [362, 385, 387, 263, 373, 380]  # p1..p6
 RIGHT_EYE_IDS = [33,  160, 158, 133, 153, 144]  # p1..p6
 
@@ -56,6 +96,8 @@ def eye_aspect_ratio(landmarks, eye_ids: list, H: int, W: int) -> float:
     Compute Eye Aspect Ratio (EAR) — Soukupova & Cech 2016.
     EAR = (||p2-p6|| + ||p3-p5||) / (2 * ||p1-p4||)
     EAR ≈ 0.3 for open eye, ~0 for closed.
+
+    landmarks: list of landmark objects with .x/.y (normalized) attributes.
     """
     pts = np.array([[landmarks[i].x * W, landmarks[i].y * H] for i in eye_ids])
     A = np.linalg.norm(pts[1] - pts[5])
@@ -92,8 +134,9 @@ def extract_ear_series(video_path: str, target_fps: float = 15.0, max_frames: in
     Returns (ear_mean, ears_left, ears_right, fps) tuple, or dict with 'error'.
 
     Backends:
-      mp_legacy  — MediaPipe FaceMesh landmarks (highest accuracy)
-      opencv     — Fast fixed-region brightness proxy (~0.3s/video, works on FF++ face crops)
+      mp_legacy  — MediaPipe FaceMesh solutions API (mp <= 0.10.3)
+      mp_tasks   — MediaPipe Tasks FaceLandmarker API (mp >= 0.10, Kaggle/Colab)
+      opencv     — Fixed eye-region brightness proxy (last resort)
     """
     cap = cv2.VideoCapture(video_path)
     orig_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -103,7 +146,7 @@ def extract_ear_series(video_path: str, target_fps: float = 15.0, max_frames: in
     ears_right: list = []
     idx = 0
 
-    # ── MediaPipe legacy path ─────────────────────────────────────────────────
+    # ── MediaPipe legacy solutions path ───────────────────────────────────────
     if _FACE_BACKEND == "mp_legacy":
         with _mp_face_mesh_cls.FaceMesh(
             static_image_mode=False,
@@ -133,7 +176,38 @@ def extract_ear_series(video_path: str, target_fps: float = 15.0, max_frames: in
                 ears_right.append(ear_r)
                 idx += 1
 
-    # ── Fast brightness fallback (no cascade, ~0.3s/video on FF++) ───────────
+    # ── MediaPipe Tasks API path (Kaggle: mediapipe >= 0.10) ──────────────────
+    elif _FACE_BACKEND == "mp_tasks":
+        from mediapipe.tasks.python.vision import FaceLandmarker
+        import mediapipe as mp
+
+        landmarker = FaceLandmarker.create_from_options(_mp_landmarker_opts)
+        try:
+            while len(ears_left) < max_frames:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if idx % step != 0:
+                    idx += 1
+                    continue
+                H, W = frame.shape[:2]
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_rgb)
+                result = landmarker.detect(mp_image)
+                if result.face_landmarks:
+                    lms = result.face_landmarks[0]  # list of NormalizedLandmark
+                    ear_l = eye_aspect_ratio(lms, LEFT_EYE_IDS, H, W)
+                    ear_r = eye_aspect_ratio(lms, RIGHT_EYE_IDS, H, W)
+                else:
+                    ear_l = ears_left[-1] if ears_left else 0.3
+                    ear_r = ears_right[-1] if ears_right else 0.3
+                ears_left.append(ear_l)
+                ears_right.append(ear_r)
+                idx += 1
+        finally:
+            landmarker.close()
+
+    # ── Brightness fallback ───────────────────────────────────────────────────
     else:
         while len(ears_left) < max_frames:
             ret, frame = cap.read()

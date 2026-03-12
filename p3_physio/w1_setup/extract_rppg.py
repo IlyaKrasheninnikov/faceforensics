@@ -33,24 +33,61 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore")
 
 # ─── MediaPipe compatibility shim ─────────────────────────────────────────────
-# MediaPipe >=0.10 removed mp.solutions on some builds (Kaggle/Colab).
-# We try old API first, then fall back to OpenCV Haar cascade.
+# Priority: mp_legacy (solutions API, mp<=0.10.3) → mp_tasks (Tasks API, mp>=0.10)
+#           → opencv (Haar cascade fallback, last resort)
 
-_FACE_BACKEND = None   # "mp_legacy" | "opencv"
-_mp_face_mesh_cls = None
+_FACE_BACKEND = None      # "mp_legacy" | "mp_tasks" | "opencv"
+_mp_face_mesh_cls = None  # used by mp_legacy
+_mp_landmarker_opts = None  # used by mp_tasks
 
 
 def _init_face_backend():
-    global _FACE_BACKEND, _mp_face_mesh_cls
+    global _FACE_BACKEND, _mp_face_mesh_cls, _mp_landmarker_opts
+
+    # 1) Try legacy solutions API (mediapipe <= 0.10.3)
     try:
         import mediapipe as mp
         _ = mp.solutions.face_mesh.FaceMesh  # raises AttributeError on new API
         _mp_face_mesh_cls = mp.solutions.face_mesh
         _FACE_BACKEND = "mp_legacy"
         print("[FaceBackend] MediaPipe legacy solutions API")
+        return
     except Exception:
-        _FACE_BACKEND = "opencv"
-        print("[FaceBackend] MediaPipe solutions unavailable — using OpenCV Haar cascade")
+        pass
+
+    # 2) Try new Tasks API (mediapipe >= 0.10 on Kaggle/Colab)
+    try:
+        import mediapipe as mp
+        from mediapipe.tasks import python as mp_python
+        from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions, RunningMode
+
+        import urllib.request, os, tempfile
+        model_path = os.path.join(tempfile.gettempdir(), "face_landmarker.task")
+        if not os.path.exists(model_path):
+            print("[FaceBackend] Downloading MediaPipe face_landmarker.task model (~3MB)...")
+            urllib.request.urlretrieve(
+                "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                model_path,
+            )
+
+        base_opts = mp_python.BaseOptions(model_asset_path=model_path)
+        _mp_landmarker_opts = FaceLandmarkerOptions(
+            base_options=base_opts,
+            running_mode=RunningMode.IMAGE,
+            num_faces=1,
+            min_face_detection_confidence=0.5,
+            min_face_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        _FACE_BACKEND = "mp_tasks"
+        print("[FaceBackend] MediaPipe Tasks API (FaceLandmarker)")
+        return
+    except Exception as e:
+        print(f"[FaceBackend] MediaPipe Tasks unavailable ({e}) — falling back to OpenCV Haar cascade")
+
+    # 3) Last resort: OpenCV Haar cascade
+    _FACE_BACKEND = "opencv"
+    print("[FaceBackend] Using OpenCV Haar cascade")
 
 
 _init_face_backend()
@@ -113,7 +150,7 @@ def get_face_roi_signals(frames: np.ndarray, fps: float = 30.0) -> dict:
         "full_face_rgb":   np.zeros((T, 3)),
     }
 
-    # ── MediaPipe legacy path ─────────────────────────────────────────────────
+    # ── MediaPipe legacy solutions path ───────────────────────────────────────
     if _FACE_BACKEND == "mp_legacy":
         with _mp_face_mesh_cls.FaceMesh(
             static_image_mode=False,
@@ -154,6 +191,50 @@ def get_face_roi_signals(frames: np.ndarray, fps: float = 30.0) -> dict:
                     if t > 0:
                         for key in results:
                             results[key][t] = results[key][t - 1]
+        return results
+
+    # ── MediaPipe Tasks API path (Kaggle: mediapipe >= 0.10) ──────────────────
+    if _FACE_BACKEND == "mp_tasks":
+        from mediapipe.tasks.python.vision import FaceLandmarker
+        import mediapipe as mp
+
+        landmarker = FaceLandmarker.create_from_options(_mp_landmarker_opts)
+        try:
+            for t, frame in enumerate(frames):
+                frame_uint8 = (frame * 255).astype(np.uint8)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_uint8)
+                result = landmarker.detect(mp_image)
+
+                if result.face_landmarks:
+                    lms = result.face_landmarks[0]  # list of NormalizedLandmark
+                    pts = np.array([[lm.x * W, lm.y * H] for lm in lms], dtype=np.float32)
+
+                    for key, ids in [
+                        ("forehead_rgb",    FOREHEAD_IDS),
+                        ("left_cheek_rgb",  LEFT_CHEEK_IDS),
+                        ("right_cheek_rgb", RIGHT_CHEEK_IDS),
+                    ]:
+                        roi_pts = pts[ids].astype(int)
+                        roi_pts[:, 0] = np.clip(roi_pts[:, 0], 0, W - 1)
+                        roi_pts[:, 1] = np.clip(roi_pts[:, 1], 0, H - 1)
+                        mask = np.zeros((H, W), dtype=np.uint8)
+                        cv2.fillConvexPoly(mask, cv2.convexHull(roi_pts), 1)
+                        region = frame[mask == 1]
+                        if len(region) > 0:
+                            results[key][t] = region.mean(axis=0)
+
+                    hull = cv2.convexHull(pts.astype(int))
+                    mask_full = np.zeros((H, W), dtype=np.uint8)
+                    cv2.fillConvexPoly(mask_full, hull, 1)
+                    region_full = frame[mask_full == 1]
+                    if len(region_full) > 0:
+                        results["full_face_rgb"][t] = region_full.mean(axis=0)
+                else:
+                    if t > 0:
+                        for key in results:
+                            results[key][t] = results[key][t - 1]
+        finally:
+            landmarker.close()
         return results
 
     # ── OpenCV Haar cascade fallback ──────────────────────────────────────────

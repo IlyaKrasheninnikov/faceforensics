@@ -98,12 +98,18 @@ def main():
         print("  [OK]            MediaPipe legacy solutions API  (best precision)")
     except Exception:
         try:
-            import mediapipe  # noqa
-            print("  [WARN]          MediaPipe installed but solutions API missing")
-            print("                  → will use OpenCV Haar cascade fallback (slightly lower precision)")
-        except ImportError:
-            print("  [WARN]          MediaPipe not installed → OpenCV Haar cascade fallback")
-    print("  Note: OpenCV fallback works fine for rPPG on face-cropped FF++ videos")
+            import mediapipe as mp
+            from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions, RunningMode  # noqa
+            print("  [OK]            MediaPipe Tasks API (FaceLandmarker) — Kaggle/Colab >= 0.10")
+            print("                  face_landmarker.task model will be downloaded on first run (~3MB)")
+        except Exception:
+            try:
+                import mediapipe  # noqa
+                print("  [WARN]          MediaPipe installed but neither solutions nor Tasks API available")
+                print("                  → will use brightness heuristic fallback (reduced accuracy)")
+            except ImportError:
+                print("  [WARN]          MediaPipe not installed → brightness heuristic fallback")
+    print("  Note: Tasks API backend gives full landmark accuracy on Kaggle (mediapipe 0.10.x)")
 
     print("\n" + "=" * 60)
     if all_ok:
