@@ -1,0 +1,49 @@
+# P3: Physiological & Behavioral Invariants — Dependencies
+# Tested on Python 3.10, CUDA 11.8 / 12.1
+
+# Core DL
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+
+# Model components
+timm>=0.9.12             # EfficientNet-B4, ViT pretrained
+einops>=0.7.0            # Tensor rearrangement
+
+# Mamba (optional — needs CUDA; falls back to Transformer if unavailable)
+# mamba-ssm>=1.2.0       # Uncomment if on GPU with CUDA 11.8+
+# causal-conv1d>=1.1.0
+
+# rPPG signal extraction
+rppg-toolbox>=0.1.0      # CHROM, POS, DeepPhys methods
+
+# Face analysis
+mediapipe>=0.10.9        # FaceMesh, iris tracking, EAR blink detection
+opencv-python>=4.8.0     # Video I/O, image processing
+dlib>=19.24.2            # Optional: landmark fallback
+
+# Signal processing
+scipy>=1.11.0            # FFT, KS-test, Butterworth filter
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Augmentation
+albumentations>=1.3.1
+
+# Experiment tracking
+trackio>=0.1.0           # https://github.com/gradio-app/trackio
+
+# Evaluation & metrics
+scikit-learn>=1.3.0      # AUC, EER, calibration
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Visualization
+grad-cam>=1.4.8          # Grad-CAM explanations
+Pillow>=10.0.0
+
+# Utilities
+tqdm>=4.65.0
+PyYAML>=6.0
+click>=8.1.0             # CLI for training scripts
+coloredlogs>=15.0.1

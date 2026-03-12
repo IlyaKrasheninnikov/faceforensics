@@ -1,0 +1,95 @@
+# P3 Master Configuration
+# All hyperparameters in one place — override via CLI: python train.py --config config.yaml
+
+# ─── Paths ────────────────────────────────────────────────────────────────────
+data:
+  ff_plus_plus_root: "/data/FaceForensics++"        # FF++ frames root
+  celebdf_root:      "/data/CelebDF-v2"
+  dfdc_root:         "/data/DFDC"
+  cache_dir:         "./logs/signal_cache"           # Precomputed rPPG/blink cache
+  output_dir:        "./checkpoints"
+
+# ─── Dataset ──────────────────────────────────────────────────────────────────
+dataset:
+  clip_len: 64                  # frames per clip
+  fps_sample: 15                # downsample to this FPS (covers ~4s at 15fps)
+  img_size: 224
+  face_scale: 1.3               # face crop scale factor
+  train_split: 0.8
+  val_split: 0.1
+  test_split: 0.1
+  balance: true                 # balance real/fake in batches
+  compression: "c23"            # FF++ compression level: c0 (raw), c23, c40
+
+# ─── Physiological Signal Extraction ──────────────────────────────────────────
+physio:
+  rppg_methods: ["CHROM", "POS"]    # methods to compute; their outputs are fused
+  rppg_window: 64                   # frames window for rPPG
+  rppg_freq_low: 0.7                # Hz — min heart rate
+  rppg_freq_high: 3.5               # Hz — max heart rate
+  blink_ear_threshold: 0.25         # Eye Aspect Ratio threshold for closed eye
+  blink_consec_frames: 2            # min frames below threshold to count as blink
+  micro_motion_sigma: 1.5           # Gaussian sigma for head motion magnification
+
+# ─── Model ────────────────────────────────────────────────────────────────────
+model:
+  backbone: "efficientnet_b4"       # timm model name; pretrained on VGGFace2 when available
+  backbone_pretrained: true
+  temporal_model: "mamba"           # options: mamba | transformer | lstm
+  temporal_layers: 4
+  temporal_dim: 512
+  rppg_feature_dim: 128             # dimension of FFT spectrum feature
+  blink_feature_dim: 16
+  dropout: 0.3
+  use_rppg_explicit: true           # concat explicit rPPG feature
+  use_blink_explicit: true          # concat explicit blink feature
+
+# ─── Training ─────────────────────────────────────────────────────────────────
+training:
+  phase1_epochs: 10             # pretrain on real-only (pulse + blink supervision)
+  phase2_epochs: 30             # full detection training
+  batch_size: 8
+  grad_accum_steps: 4           # effective batch = 32
+  optimizer: "adamw"
+  lr_backbone: 1.0e-5
+  lr_head: 1.0e-4
+  lr_temporal: 5.0e-5
+  weight_decay: 1.0e-4
+  warmup_epochs: 2
+  scheduler: "cosine"           # cosine LR decay
+  clip_grad_norm: 1.0
+  seed: 42
+  num_workers: 4
+  fp16: true                    # mixed precision training
+
+# ─── Loss Weights ─────────────────────────────────────────────────────────────
+loss:
+  classification: 1.0
+  pulse_spectral: 0.4           # SpectralEntropyLoss on rPPG head output
+  blink_aux: 0.3                # BCE on blink sequence prediction
+  contrastive: 0.1              # real=low spectral entropy (periodic), fake=high
+
+# ─── Augmentation ─────────────────────────────────────────────────────────────
+augmentation:
+  use_pulse_strip: true         # strip rPPG from real → label as fake
+  use_blink_freeze: true        # freeze eyes in real → label as fake
+  pulse_strip_prob: 0.3         # probability of applying pulse strip augmentation
+  blink_freeze_prob: 0.2
+  color_jitter: 0.2
+  horizontal_flip: true
+  temporal_jitter: true         # randomly drop/repeat frames
+  compress_augment: true        # re-encode at random CRF [18, 40]
+
+# ─── Evaluation ───────────────────────────────────────────────────────────────
+eval:
+  metrics: ["auc", "eer", "ap", "ece"]
+  ece_n_bins: 15
+  eval_datasets: ["ff_plus_plus", "celebdf", "dfdc"]
+  calibrate: true               # Platt scaling post-hoc
+
+# ─── Trackio ──────────────────────────────────────────────────────────────────
+trackio:
+  project: "p3_physio_deepfake"
+  run_name: "baseline"          # override per run
+  log_interval: 10              # log every N steps
+  log_images: true              # log sample frames with predictions
