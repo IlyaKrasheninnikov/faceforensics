@@ -64,28 +64,36 @@ def eye_aspect_ratio(landmarks, eye_ids: list, H: int, W: int) -> float:
     return (A + B) / (2.0 * C + 1e-8)
 
 
-def _ear_from_eye_bbox(frame_gray: np.ndarray, eye_box) -> float:
+def _fixed_eye_brightness(frame_gray: np.ndarray) -> float:
     """
-    Fallback EAR estimate using eye-region pixel intensity variance.
-    When the eye is closed, the region is more uniform (less variance).
-    Maps variance to a pseudo-EAR in [0, 0.4] range.
+    Fast blink proxy for face-cropped videos (FF++ style).
+    FF++ videos are already tightly cropped to the face, so fixed relative
+    boxes work reliably: upper-middle strip covers both eyes.
+
+    Blink signal: mean brightness of the eye-band.
+    When eyes close → darker eyelids appear → brightness drops.
+    Returns a pseudo-EAR in ~[0.1, 0.4]: lower = more closed.
     """
-    x, y, w, h = eye_box
-    H_f, W_f = frame_gray.shape
-    x1, y1 = max(0, x), max(0, y)
-    x2, y2 = min(W_f, x + w), min(H_f, y + h)
-    if x2 <= x1 or y2 <= y1:
-        return 0.3
-    region = frame_gray[y1:y2, x1:x2].astype(np.float32)
-    # Normalize variance to pseudo-EAR: closed eye → low var → low EAR
-    var = float(region.var())
-    return float(np.clip(var / 500.0, 0.0, 0.4))
+    H, W = frame_gray.shape
+    # Eye band: rows 25-45% of height, columns 15-85% of width
+    y1, y2 = int(H * 0.25), int(H * 0.45)
+    x1, x2 = int(W * 0.15), int(W * 0.85)
+    band = frame_gray[y1:y2, x1:x2].astype(np.float32)
+    mean_brightness = float(band.mean()) / 255.0  # [0, 1]
+    # Scale: typical open-eye region ~0.55-0.75 brightness → pseudo-EAR ~0.25-0.35
+    # Closed eye / blink → brightness drops by ~0.1-0.2
+    pseudo_ear = float(np.clip(mean_brightness * 0.55, 0.05, 0.4))
+    return pseudo_ear
 
 
 def extract_ear_series(video_path: str, target_fps: float = 15.0, max_frames: int = 600):
     """
     Extract per-frame EAR (left, right, mean) from video.
     Returns (ear_mean, ears_left, ears_right, fps) tuple, or dict with 'error'.
+
+    Backends:
+      mp_legacy  — MediaPipe FaceMesh landmarks (highest accuracy)
+      opencv     — Fast fixed-region brightness proxy (~0.3s/video, works on FF++ face crops)
     """
     cap = cv2.VideoCapture(video_path)
     orig_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -125,16 +133,8 @@ def extract_ear_series(video_path: str, target_fps: float = 15.0, max_frames: in
                 ears_right.append(ear_r)
                 idx += 1
 
-    # ── OpenCV fallback: eye cascade ─────────────────────────────────────────
+    # ── Fast brightness fallback (no cascade, ~0.3s/video on FF++) ───────────
     else:
-        face_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        )
-        eye_cascade = cv2.CascadeClassifier(
-            cv2.data.haarcascades + "haarcascade_eye.xml"
-        )
-        last_eye_boxes = None
-
         while len(ears_left) < max_frames:
             ret, frame = cap.read()
             if not ret:
@@ -142,34 +142,10 @@ def extract_ear_series(video_path: str, target_fps: float = 15.0, max_frames: in
             if idx % step != 0:
                 idx += 1
                 continue
-
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            H, W = gray.shape
-
-            faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
-            ear_l = ears_left[-1] if ears_left else 0.3
-            ear_r = ears_right[-1] if ears_right else 0.3
-
-            if len(faces) > 0:
-                fx, fy, fw, fh = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
-                face_gray = gray[fy:fy+fh, fx:fx+fw]
-                eyes = eye_cascade.detectMultiScale(face_gray, 1.1, 5, minSize=(20, 20))
-                if len(eyes) >= 2:
-                    eyes = sorted(eyes, key=lambda e: e[0])  # sort by x → left/right
-                    # Shift eye boxes to full-frame coordinates
-                    left_box  = (fx + eyes[0][0], fy + eyes[0][1], eyes[0][2], eyes[0][3])
-                    right_box = (fx + eyes[1][0], fy + eyes[1][1], eyes[1][2], eyes[1][3])
-                    last_eye_boxes = (left_box, right_box)
-                elif len(eyes) == 1:
-                    box = (fx + eyes[0][0], fy + eyes[0][1], eyes[0][2], eyes[0][3])
-                    last_eye_boxes = (box, box)
-
-            if last_eye_boxes is not None:
-                ear_l = _ear_from_eye_bbox(gray, last_eye_boxes[0])
-                ear_r = _ear_from_eye_bbox(gray, last_eye_boxes[1])
-
-            ears_left.append(ear_l)
-            ears_right.append(ear_r)
+            pseudo_ear = _fixed_eye_brightness(gray)
+            ears_left.append(pseudo_ear)
+            ears_right.append(pseudo_ear)
             idx += 1
 
     cap.release()
@@ -192,9 +168,9 @@ def detect_blinks(ear_series: np.ndarray, fps: float, threshold: float = None, c
     """
     if threshold is None:
         # Otsu thresholding on EAR values (treat as grayscale histogram)
-        ear_norm = ((ear_series - ear_series.min()) / (ear_series.ptp() + 1e-8) * 255).astype(np.uint8)
+        ear_norm = ((ear_series - ear_series.min()) / (np.ptp(ear_series) + 1e-8) * 255).astype(np.uint8)
         _, thresh_img = cv2.threshold(ear_norm.reshape(-1, 1), 0, 255, cv2.THRESH_OTSU)
-        threshold = ear_series.min() + (ear_series.ptp()) * (thresh_img[0, 0] / 255.0)
+        threshold = ear_series.min() + np.ptp(ear_series) * (thresh_img[0, 0] / 255.0)
         threshold = min(threshold, 0.25)  # cap at standard threshold
 
     closed = (ear_series < threshold).astype(int)
