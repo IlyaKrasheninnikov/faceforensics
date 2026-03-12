@@ -92,7 +92,7 @@ def _init_face_backend():
 
 _init_face_backend()
 
-# Landmark sub-region indices (only used in mp_legacy path)
+# Landmark sub-region indices — valid for both mp_legacy (468 lms) and mp_tasks (478 lms)
 FOREHEAD_IDS    = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
                    397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
                    172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
@@ -333,6 +333,9 @@ def compute_snr_and_bpm(pulse: np.ndarray, fps: float, freq_lo: float = 0.7, fre
 
     signal_power = fft_mag[mask].max()
     noise_power = fft_mag[~mask].mean() + 1e-12
+    # Guard: if pulse is all-zeros (no face detected), signal_power == 0 → return sentinel
+    if signal_power < 1e-12:
+        return {"snr_db": -99.0, "bpm": 0.0, "psd_freqs": freqs.tolist(), "psd_power": fft_mag.tolist(), "peak_freq": 0.0}
     snr_db = 10 * np.log10(signal_power / noise_power)
 
     peak_freq = freqs[mask][fft_mag[mask].argmax()]
@@ -457,6 +460,11 @@ def batch_extract(video_dir: str, label: str, out_dir: str, max_videos: int = 20
             continue
 
     df = pd.DataFrame(records)
+    # Drop rows where SNR is the -99 sentinel (face not detected / zero signal)
+    before = len(df)
+    df = df[df["mean_snr_db"] > -50].reset_index(drop=True)
+    if len(df) < before:
+        print(f"  [INFO] Dropped {before - len(df)} videos with no face detection (SNR sentinel)")
     df.to_csv(out_dir / f"rppg_summary_{label}.csv", index=False)
     print(f"\nSaved {len(df)} results → {out_dir / f'rppg_summary_{label}.csv'}")
 

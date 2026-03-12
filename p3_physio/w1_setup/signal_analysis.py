@@ -44,6 +44,9 @@ def ks_test(real: pd.Series, fake: pd.Series, name: str) -> dict:
     """Run KS test and print result."""
     r = real.dropna().values
     f = fake.dropna().values
+    # Drop non-finite values (e.g. -inf/-99 sentinel from failed SNR)
+    r = r[np.isfinite(r)]
+    f = f[np.isfinite(f)]
     if len(r) == 0 or len(f) == 0:
         return {}
     ks_stat, p_val = stats.ks_2samp(r, f)
@@ -66,6 +69,11 @@ def plot_distribution(real: pd.Series, fake: pd.Series, title: str, xlabel: str,
     fig, ax = plt.subplots(figsize=(8, 4))
     r = real.dropna()
     f = fake.dropna()
+    r = r[np.isfinite(r)]
+    f = f[np.isfinite(f)]
+    if len(r) == 0 or len(f) == 0:
+        plt.close()
+        return
 
     ax.hist(r, bins=25, alpha=0.4, color="royalblue", label=f"Real (n={len(r)})", density=True)
     ax.hist(f, bins=25, alpha=0.4, color="tomato", label=f"Fake (n={len(f)})", density=True)
