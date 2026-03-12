@@ -21,21 +21,37 @@ import argparse
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 import numpy as np
 import pandas as pd
 from scipy.stats import entropy as scipy_entropy
 from tqdm import tqdm
 
-mp_face_mesh = mp.solutions.face_mesh
+# ─── MediaPipe compatibility shim ─────────────────────────────────────────────
+_FACE_BACKEND = None
+_mp_face_mesh_cls = None
+
+
+def _init_face_backend():
+    global _FACE_BACKEND, _mp_face_mesh_cls
+    try:
+        import mediapipe as mp
+        _ = mp.solutions.face_mesh.FaceMesh
+        _mp_face_mesh_cls = mp.solutions.face_mesh
+        _FACE_BACKEND = "mp_legacy"
+        print("[FaceBackend] MediaPipe legacy solutions API")
+    except Exception:
+        _FACE_BACKEND = "opencv"
+        print("[FaceBackend] MediaPipe solutions unavailable — blink via eye-region heuristic")
+
+
+_init_face_backend()
 
 # MediaPipe 468-landmark indices for left and right eyes
-# (from FaceMesh landmark map)
-LEFT_EYE_IDS = [362, 385, 387, 263, 373, 380]   # p1..p6
-RIGHT_EYE_IDS = [33, 160, 158, 133, 153, 144]    # p1..p6
+LEFT_EYE_IDS  = [362, 385, 387, 263, 373, 380]  # p1..p6
+RIGHT_EYE_IDS = [33,  160, 158, 133, 153, 144]  # p1..p6
 
 
-def eye_aspect_ratio(landmarks: np.ndarray, eye_ids: list, H: int, W: int) -> float:
+def eye_aspect_ratio(landmarks, eye_ids: list, H: int, W: int) -> float:
     """
     Compute Eye Aspect Ratio (EAR) — Soukupova & Cech 2016.
     EAR = (||p2-p6|| + ||p3-p5||) / (2 * ||p1-p4||)
@@ -48,26 +64,77 @@ def eye_aspect_ratio(landmarks: np.ndarray, eye_ids: list, H: int, W: int) -> fl
     return (A + B) / (2.0 * C + 1e-8)
 
 
-def extract_ear_series(video_path: str, target_fps: float = 15.0, max_frames: int = 600) -> dict:
+def _ear_from_eye_bbox(frame_gray: np.ndarray, eye_box) -> float:
+    """
+    Fallback EAR estimate using eye-region pixel intensity variance.
+    When the eye is closed, the region is more uniform (less variance).
+    Maps variance to a pseudo-EAR in [0, 0.4] range.
+    """
+    x, y, w, h = eye_box
+    H_f, W_f = frame_gray.shape
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(W_f, x + w), min(H_f, y + h)
+    if x2 <= x1 or y2 <= y1:
+        return 0.3
+    region = frame_gray[y1:y2, x1:x2].astype(np.float32)
+    # Normalize variance to pseudo-EAR: closed eye → low var → low EAR
+    var = float(region.var())
+    return float(np.clip(var / 500.0, 0.0, 0.4))
+
+
+def extract_ear_series(video_path: str, target_fps: float = 15.0, max_frames: int = 600):
     """
     Extract per-frame EAR (left, right, mean) from video.
-    Returns dict with EAR series and blink statistics.
+    Returns (ear_mean, ears_left, ears_right, fps) tuple, or dict with 'error'.
     """
     cap = cv2.VideoCapture(video_path)
     orig_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     step = max(1, round(orig_fps / target_fps))
 
-    ears_left = []
-    ears_right = []
+    ears_left: list = []
+    ears_right: list = []
     idx = 0
 
-    with mp_face_mesh.FaceMesh(
-        static_image_mode=False,
-        max_num_faces=1,
-        refine_landmarks=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    ) as face_mesh:
+    # ── MediaPipe legacy path ─────────────────────────────────────────────────
+    if _FACE_BACKEND == "mp_legacy":
+        with _mp_face_mesh_cls.FaceMesh(
+            static_image_mode=False,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        ) as face_mesh:
+            while len(ears_left) < max_frames:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if idx % step != 0:
+                    idx += 1
+                    continue
+                H, W = frame.shape[:2]
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                result = face_mesh.process(frame_rgb)
+                if result.multi_face_landmarks:
+                    lms = result.multi_face_landmarks[0].landmark
+                    ear_l = eye_aspect_ratio(lms, LEFT_EYE_IDS, H, W)
+                    ear_r = eye_aspect_ratio(lms, RIGHT_EYE_IDS, H, W)
+                else:
+                    ear_l = ears_left[-1] if ears_left else 0.3
+                    ear_r = ears_right[-1] if ears_right else 0.3
+                ears_left.append(ear_l)
+                ears_right.append(ear_r)
+                idx += 1
+
+    # ── OpenCV fallback: eye cascade ─────────────────────────────────────────
+    else:
+        face_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        )
+        eye_cascade = cv2.CascadeClassifier(
+            cv2.data.haarcascades + "haarcascade_eye.xml"
+        )
+        last_eye_boxes = None
+
         while len(ears_left) < max_frames:
             ret, frame = cap.read()
             if not ret:
@@ -76,18 +143,30 @@ def extract_ear_series(video_path: str, target_fps: float = 15.0, max_frames: in
                 idx += 1
                 continue
 
-            H, W = frame.shape[:2]
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = face_mesh.process(frame_rgb)
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            H, W = gray.shape
 
-            if result.multi_face_landmarks:
-                lms = result.multi_face_landmarks[0].landmark
-                ear_l = eye_aspect_ratio(lms, LEFT_EYE_IDS, H, W)
-                ear_r = eye_aspect_ratio(lms, RIGHT_EYE_IDS, H, W)
-            else:
-                # Carry forward
-                ear_l = ears_left[-1] if ears_left else 0.3
-                ear_r = ears_right[-1] if ears_right else 0.3
+            faces = face_cascade.detectMultiScale(gray, 1.1, 5, minSize=(60, 60))
+            ear_l = ears_left[-1] if ears_left else 0.3
+            ear_r = ears_right[-1] if ears_right else 0.3
+
+            if len(faces) > 0:
+                fx, fy, fw, fh = sorted(faces, key=lambda f: f[2]*f[3], reverse=True)[0]
+                face_gray = gray[fy:fy+fh, fx:fx+fw]
+                eyes = eye_cascade.detectMultiScale(face_gray, 1.1, 5, minSize=(20, 20))
+                if len(eyes) >= 2:
+                    eyes = sorted(eyes, key=lambda e: e[0])  # sort by x → left/right
+                    # Shift eye boxes to full-frame coordinates
+                    left_box  = (fx + eyes[0][0], fy + eyes[0][1], eyes[0][2], eyes[0][3])
+                    right_box = (fx + eyes[1][0], fy + eyes[1][1], eyes[1][2], eyes[1][3])
+                    last_eye_boxes = (left_box, right_box)
+                elif len(eyes) == 1:
+                    box = (fx + eyes[0][0], fy + eyes[0][1], eyes[0][2], eyes[0][3])
+                    last_eye_boxes = (box, box)
+
+            if last_eye_boxes is not None:
+                ear_l = _ear_from_eye_bbox(gray, last_eye_boxes[0])
+                ear_r = _ear_from_eye_bbox(gray, last_eye_boxes[1])
 
             ears_left.append(ear_l)
             ears_right.append(ear_r)
@@ -187,7 +266,10 @@ def batch_extract(video_dir: str, label: str, out_dir: str, max_videos: int = 20
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    video_files = sorted(list(video_dir.glob("*.mp4")) + list(video_dir.glob("*.avi")))[:max_videos]
+    video_files = sorted(
+        list(video_dir.glob("*.mp4")) + list(video_dir.glob("*.avi")) +
+        list(video_dir.glob("*/*.mp4")) + list(video_dir.glob("*/*.avi"))
+    )[:max_videos]
 
     if not video_files:
         print(f"[WARN] No videos in {video_dir}")

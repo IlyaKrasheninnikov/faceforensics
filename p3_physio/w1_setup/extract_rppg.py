@@ -24,7 +24,6 @@ import warnings
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 import numpy as np
 import pandas as pd
 from scipy import signal as scipy_signal
@@ -33,14 +32,65 @@ from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
-# ─── MediaPipe face mesh for ROI ───────────────────────────────────────────────
-mp_face_mesh = mp.solutions.face_mesh
+# ─── MediaPipe compatibility shim ─────────────────────────────────────────────
+# MediaPipe >=0.10 removed mp.solutions on some builds (Kaggle/Colab).
+# We try old API first, then fall back to OpenCV Haar cascade.
 
-# Cheek / forehead landmark indices (approx face ROI without hair/mouth)
-# MediaPipe 468-point face mesh
-FOREHEAD_IDS = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
-LEFT_CHEEK_IDS = [116, 123, 147, 213, 192, 214, 210, 211, 32, 208, 199, 428, 262, 369, 395, 394, 379, 365, 397, 288, 361, 323]
-RIGHT_CHEEK_IDS = [345, 352, 376, 433, 416, 434, 430, 431, 262, 428, 423, 204, 32, 140, 166, 165, 150, 136, 172, 58, 132, 93]
+_FACE_BACKEND = None   # "mp_legacy" | "opencv"
+_mp_face_mesh_cls = None
+
+
+def _init_face_backend():
+    global _FACE_BACKEND, _mp_face_mesh_cls
+    try:
+        import mediapipe as mp
+        _ = mp.solutions.face_mesh.FaceMesh  # raises AttributeError on new API
+        _mp_face_mesh_cls = mp.solutions.face_mesh
+        _FACE_BACKEND = "mp_legacy"
+        print("[FaceBackend] MediaPipe legacy solutions API")
+    except Exception:
+        _FACE_BACKEND = "opencv"
+        print("[FaceBackend] MediaPipe solutions unavailable — using OpenCV Haar cascade")
+
+
+_init_face_backend()
+
+# Landmark sub-region indices (only used in mp_legacy path)
+FOREHEAD_IDS    = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
+                   397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
+                   172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+LEFT_CHEEK_IDS  = [116, 123, 147, 213, 192, 214, 210, 211, 32, 208, 199,
+                   428, 262, 369, 395, 394, 379, 365, 397, 288, 361, 323]
+RIGHT_CHEEK_IDS = [345, 352, 376, 433, 416, 434, 430, 431, 262, 428, 423,
+                   204, 32, 140, 166, 165, 150, 136, 172, 58, 132, 93]
+
+
+def _detect_face_opencv(frame_uint8: np.ndarray):
+    """Returns (x, y, w, h) of largest face via Haar cascade, or None."""
+    gray = cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2GRAY)
+    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+    detector = cv2.CascadeClassifier(cascade_path)
+    faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+    if len(faces) == 0:
+        return None
+    return sorted(faces, key=lambda f: f[2] * f[3], reverse=True)[0]
+
+
+def _face_bbox_sub_rois(x, y, w, h):
+    """Approximate forehead, left-cheek, right-cheek boxes from face bbox."""
+    forehead = (x + w // 4,      y,               w // 2, h // 5)
+    l_cheek  = (x,               y + h * 2 // 5,  w // 3, h // 4)
+    r_cheek  = (x + w * 2 // 3,  y + h * 2 // 5,  w // 3, h // 4)
+    return forehead, l_cheek, r_cheek
+
+
+def _crop_mean(frame: np.ndarray, box, H: int, W: int) -> np.ndarray:
+    x, y, w, h = box
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(W, x + w), min(H, y + h)
+    if x2 <= x1 or y2 <= y1:
+        return np.zeros(3)
+    return frame[y1:y2, x1:x2].mean(axis=(0, 1))
 
 
 def get_face_roi_signals(frames: np.ndarray, fps: float = 30.0) -> dict:
@@ -52,57 +102,83 @@ def get_face_roi_signals(frames: np.ndarray, fps: float = 30.0) -> dict:
         fps: video frame rate
 
     Returns:
-        dict with 'forehead_rgb', 'left_cheek_rgb', 'right_cheek_rgb' (T, 3) arrays
+        dict with 'forehead_rgb', 'left_cheek_rgb', 'right_cheek_rgb',
+        'full_face_rgb' — each (T, 3) float32
     """
     T, H, W, _ = frames.shape
     results = {
-        "forehead_rgb": np.zeros((T, 3)),
-        "left_cheek_rgb": np.zeros((T, 3)),
+        "forehead_rgb":    np.zeros((T, 3)),
+        "left_cheek_rgb":  np.zeros((T, 3)),
         "right_cheek_rgb": np.zeros((T, 3)),
-        "full_face_rgb": np.zeros((T, 3)),
+        "full_face_rgb":   np.zeros((T, 3)),
     }
 
-    with mp_face_mesh.FaceMesh(
-        static_image_mode=False,
-        max_num_faces=1,
-        refine_landmarks=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    ) as face_mesh:
-        for t, frame in enumerate(frames):
-            frame_uint8 = (frame * 255).astype(np.uint8)
-            result = face_mesh.process(frame_uint8)
+    # ── MediaPipe legacy path ─────────────────────────────────────────────────
+    if _FACE_BACKEND == "mp_legacy":
+        with _mp_face_mesh_cls.FaceMesh(
+            static_image_mode=False,
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        ) as face_mesh:
+            for t, frame in enumerate(frames):
+                frame_uint8 = (frame * 255).astype(np.uint8)
+                result = face_mesh.process(frame_uint8)
 
-            if result.multi_face_landmarks:
-                lms = result.multi_face_landmarks[0].landmark
-                pts = np.array([[lm.x * W, lm.y * H] for lm in lms], dtype=np.float32)
+                if result.multi_face_landmarks:
+                    lms = result.multi_face_landmarks[0].landmark
+                    pts = np.array([[lm.x * W, lm.y * H] for lm in lms], dtype=np.float32)
 
-                for key, ids in [
-                    ("forehead_rgb", FOREHEAD_IDS),
-                    ("left_cheek_rgb", LEFT_CHEEK_IDS),
-                    ("right_cheek_rgb", RIGHT_CHEEK_IDS),
-                ]:
-                    roi_pts = pts[ids].astype(int)
-                    roi_pts[:, 0] = np.clip(roi_pts[:, 0], 0, W - 1)
-                    roi_pts[:, 1] = np.clip(roi_pts[:, 1], 0, H - 1)
-                    mask = np.zeros((H, W), dtype=np.uint8)
-                    cv2.fillConvexPoly(mask, cv2.convexHull(roi_pts), 1)
-                    region = frame[mask == 1]
-                    if len(region) > 0:
-                        results[key][t] = region.mean(axis=0)
+                    for key, ids in [
+                        ("forehead_rgb",    FOREHEAD_IDS),
+                        ("left_cheek_rgb",  LEFT_CHEEK_IDS),
+                        ("right_cheek_rgb", RIGHT_CHEEK_IDS),
+                    ]:
+                        roi_pts = pts[ids].astype(int)
+                        roi_pts[:, 0] = np.clip(roi_pts[:, 0], 0, W - 1)
+                        roi_pts[:, 1] = np.clip(roi_pts[:, 1], 0, H - 1)
+                        mask = np.zeros((H, W), dtype=np.uint8)
+                        cv2.fillConvexPoly(mask, cv2.convexHull(roi_pts), 1)
+                        region = frame[mask == 1]
+                        if len(region) > 0:
+                            results[key][t] = region.mean(axis=0)
 
-                # Full face hull
-                hull = cv2.convexHull(pts.astype(int))
-                mask_full = np.zeros((H, W), dtype=np.uint8)
-                cv2.fillConvexPoly(mask_full, hull, 1)
-                region_full = frame[mask_full == 1]
-                if len(region_full) > 0:
-                    results["full_face_rgb"][t] = region_full.mean(axis=0)
-            else:
-                # No face detected: carry forward last value
-                if t > 0:
-                    for key in results:
-                        results[key][t] = results[key][t - 1]
+                    hull = cv2.convexHull(pts.astype(int))
+                    mask_full = np.zeros((H, W), dtype=np.uint8)
+                    cv2.fillConvexPoly(mask_full, hull, 1)
+                    region_full = frame[mask_full == 1]
+                    if len(region_full) > 0:
+                        results["full_face_rgb"][t] = region_full.mean(axis=0)
+                else:
+                    if t > 0:
+                        for key in results:
+                            results[key][t] = results[key][t - 1]
+        return results
+
+    # ── OpenCV Haar cascade fallback ──────────────────────────────────────────
+    # Since videos are already face-cropped in FF++ (c23), the whole frame
+    # IS essentially the face — Haar still helps us sub-divide into regions.
+    last_box = None
+    for t, frame in enumerate(frames):
+        frame_uint8 = (frame * 255).astype(np.uint8)
+        face = _detect_face_opencv(frame_uint8)
+
+        if face is not None:
+            last_box = face
+        elif last_box is None:
+            # No detection at all: use a centered 60% crop as the face
+            cx, cy = W // 2, H // 2
+            fw, fh = int(W * 0.6), int(H * 0.6)
+            last_box = (cx - fw // 2, cy - fh // 2, fw, fh)
+
+        x, y, w, h = last_box
+        forehead_box, l_cheek_box, r_cheek_box = _face_bbox_sub_rois(x, y, w, h)
+
+        results["forehead_rgb"][t]    = _crop_mean(frame, forehead_box, H, W)
+        results["left_cheek_rgb"][t]  = _crop_mean(frame, l_cheek_box,  H, W)
+        results["right_cheek_rgb"][t] = _crop_mean(frame, r_cheek_box,  H, W)
+        results["full_face_rgb"][t]   = _crop_mean(frame, last_box,     H, W)
 
     return results
 
@@ -263,10 +339,15 @@ def batch_extract(video_dir: str, label: str, out_dir: str, max_videos: int = 20
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    video_files = sorted(list(video_dir.glob("*.mp4")) + list(video_dir.glob("*.avi")))[:max_videos]
+    # Search both flat and one-level-deep (handles FF++ video/ subdirs and flat Kaggle mounts)
+    video_files = sorted(
+        list(video_dir.glob("*.mp4")) + list(video_dir.glob("*.avi")) +
+        list(video_dir.glob("*/*.mp4")) + list(video_dir.glob("*/*.avi"))
+    )[:max_videos]
 
     if not video_files:
         print(f"[WARN] No video files found in {video_dir}")
+        print(f"       Searched: {video_dir}/*.mp4 and {video_dir}/*/*.mp4")
         return pd.DataFrame()
 
     print(f"\nProcessing {len(video_files)} {label} videos from {video_dir}")

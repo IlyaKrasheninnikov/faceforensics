@@ -53,7 +53,7 @@ class ExperimentLogger:
         self._csv_file = None
 
         if TRACKIO_AVAILABLE:
-            trackio.init(project=project, name=self.run_name, config=config)
+            trackio.init(project=project, name=self.run_name, config=config, space_id="GoodBoyXD/bioforensics")
             print(f"[Trackio] Initialized run '{self.run_name}' in project '{project}'")
             print(f"          Dashboard: check trackio output above for URL")
         else:

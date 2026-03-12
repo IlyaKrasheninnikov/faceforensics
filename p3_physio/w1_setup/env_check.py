@@ -11,7 +11,6 @@ REQUIRED = {
     "torch": "2.0.0",
     "torchvision": "0.15.0",
     "timm": "0.9.0",
-    "mediapipe": "0.10.0",
     "cv2": "4.7.0",
     "scipy": "1.10.0",
     "sklearn": "1.2.0",
@@ -24,6 +23,7 @@ REQUIRED = {
 }
 
 OPTIONAL = {
+    "mediapipe": "0.10.0",   # optional: improves face ROI precision; falls back to OpenCV Haar
     "trackio": "0.1.0",
     "rppg_toolbox": "0.1.0",
     "mamba_ssm": "1.0.0",
@@ -90,6 +90,20 @@ def main():
         check_package(name, ver, optional=True)
 
     check_cuda()
+
+    print("\n[Face detection backend]")
+    try:
+        import mediapipe as mp
+        _ = mp.solutions.face_mesh.FaceMesh
+        print("  [OK]            MediaPipe legacy solutions API  (best precision)")
+    except Exception:
+        try:
+            import mediapipe  # noqa
+            print("  [WARN]          MediaPipe installed but solutions API missing")
+            print("                  → will use OpenCV Haar cascade fallback (slightly lower precision)")
+        except ImportError:
+            print("  [WARN]          MediaPipe not installed → OpenCV Haar cascade fallback")
+    print("  Note: OpenCV fallback works fine for rPPG on face-cropped FF++ videos")
 
     print("\n" + "=" * 60)
     if all_ok:
