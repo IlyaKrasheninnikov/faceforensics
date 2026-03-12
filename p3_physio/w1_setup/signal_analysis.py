@@ -166,7 +166,7 @@ def run_analysis(rppg_real_path, rppg_fake_path, blink_real_path, blink_fake_pat
 
     # ─── Log to Trackio ───────────────────────────────────────────────────────
     if TRACKIO_AVAILABLE and all_metrics:
-        trackio.init(project="p3_physio_deepfake", run_name="w1_signal_analysis")
+        trackio.init(project="p3_physio_deepfake", project="w1_signal_analysis")
         trackio.log(all_metrics)
         trackio.log({
             "n_significant_features": len(sig_metrics),
