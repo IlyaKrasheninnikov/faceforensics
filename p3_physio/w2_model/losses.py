@@ -63,6 +63,8 @@ class SpectralEntropyLoss(nn.Module):
         returns: (B,) spectral entropy per sample
         """
         B, T = pulse.shape
+        # FFT does not support fp16 — upcast
+        pulse = pulse.float()
         # FFT magnitude squared = PSD estimate
         fft = torch.fft.rfft(pulse, dim=-1)
         psd = torch.abs(fft) ** 2 + 1e-10                     # (B, T//2+1)
@@ -246,8 +248,7 @@ class PhysioMultiTaskLoss(nn.Module):
             + self.w_contrastive * losses["contrastive"]
         )
 
-        return {k: v.item() if isinstance(v, torch.Tensor) and v.dim() == 0 else v
-                for k, v in losses.items()}
+        return losses
 
 
 # ─── Quick test ───────────────────────────────────────────────────────────────

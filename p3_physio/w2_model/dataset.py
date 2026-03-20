@@ -48,6 +48,7 @@ FF_MANIPULATION_TYPES = {
     "FaceSwap": 1,
     "NeuralTextures": 1,
     "FaceShifter": 1,
+    "DeepFakeDetection": 1,  # additional FF++ category
 }
 
 CELEBDF_REAL_DIR = "real"
