@@ -326,16 +326,30 @@ class PhysioDeepfakeDataset(Dataset):
 # ─── Dataset builders ─────────────────────────────────────────────────────────
 
 def build_ff_plus_plus_list(ff_root: str, compression: str = "c23") -> Tuple[List, List]:
-    """Scan FF++ directory structure and return (video_paths, labels)."""
+    """Scan FF++ directory structure and return (video_paths, labels).
+
+    Supports multiple layouts:
+      - Flat:   ff_root/original/*.mp4, ff_root/Deepfakes/*.mp4  (Kaggle xdxd003)
+      - Nested: ff_root/original/c23/videos/*.mp4                (standard FF++)
+      - Alt:    ff_root/original_sequences/youtube/c23/videos/*.mp4
+    """
     ff_root = Path(ff_root)
     video_paths, labels = [], []
 
     for manip_type, label in FF_MANIPULATION_TYPES.items():
-        vid_dir = ff_root / manip_type / compression / "videos"
-        if vid_dir.exists():
-            vids = sorted(list(vid_dir.glob("*.mp4")))
-            video_paths.extend([str(v) for v in vids])
-            labels.extend([label] * len(vids))
+        # Try flat layout first (*.mp4 directly in folder), then nested
+        candidates = [
+            ff_root / manip_type,                          # flat
+            ff_root / manip_type / compression / "videos", # nested
+        ]
+        for vid_dir in candidates:
+            if vid_dir.exists():
+                vids = sorted(list(vid_dir.glob("*.mp4")))
+                if vids:
+                    video_paths.extend([str(v) for v in vids])
+                    labels.extend([label] * len(vids))
+                    print(f"  {manip_type}: {len(vids)} videos ({vid_dir})")
+                    break
 
     return video_paths, labels
 

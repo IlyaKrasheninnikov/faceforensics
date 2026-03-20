@@ -45,11 +45,18 @@ from w2_model.dataset import PhysioDeepfakeDataset, build_ff_plus_plus_list
 def build_real_only_dataset(ff_root: str, cache_dir: str, clip_len: int, img_size: int) -> Dataset:
     """Return dataset containing only real (original) FF++ videos."""
     from pathlib import Path
-    real_dir = Path(ff_root) / "original" / "c23" / "videos"
-    if not real_dir.exists():
-        # Try alternative structure
-        real_dir = Path(ff_root) / "original_sequences" / "youtube" / "c23" / "videos"
-    if not real_dir.exists():
+    # Try multiple known layouts
+    candidates = [
+        Path(ff_root) / "original",                                    # flat: original/*.mp4
+        Path(ff_root) / "original" / "c23" / "videos",                # nested: original/c23/videos/*.mp4
+        Path(ff_root) / "original_sequences" / "youtube" / "c23" / "videos",
+    ]
+    real_dir = None
+    for c in candidates:
+        if c.exists() and list(c.glob("*.mp4")):
+            real_dir = c
+            break
+    if real_dir is None:
         raise FileNotFoundError(f"FF++ original videos not found at {ff_root}")
 
     video_files = sorted(list(real_dir.glob("*.mp4")))
