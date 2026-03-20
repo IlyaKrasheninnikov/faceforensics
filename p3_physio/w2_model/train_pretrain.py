@@ -59,7 +59,7 @@ def build_real_only_dataset(ff_root: str, cache_dir: str, clip_len: int, img_siz
     if real_dir is None:
         raise FileNotFoundError(f"FF++ original videos not found at {ff_root}")
 
-    video_files = sorted(list(real_dir.glob("*.mp4")))[:10]
+    video_files = sorted(list(real_dir.glob("*.mp4")))[:50]
     print(f"Found {len(video_files)} real videos for pretraining")
 
     return PhysioDeepfakeDataset(
