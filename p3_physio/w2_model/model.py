@@ -98,14 +98,22 @@ class FrameEncoder(nn.Module):
             )
             self.out_dim = 64
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, chunk_size: int = 16) -> torch.Tensor:
         """
         x: (B, T, C, H, W)
         returns: (B, T, D)
+
+        Processes frames in chunks to avoid OOM on long clips.
         """
         B, T, C, H, W = x.shape
         x = x.view(B * T, C, H, W)
-        feat = self.encoder(x)           # (B*T, D)
+        if B * T <= chunk_size:
+            feat = self.encoder(x)
+        else:
+            feats = []
+            for i in range(0, B * T, chunk_size):
+                feats.append(self.encoder(x[i:i + chunk_size]))
+            feat = torch.cat(feats, dim=0)
         return feat.view(B, T, -1)       # (B, T, D)
 
 
