@@ -79,6 +79,7 @@ def compute_hr_mae(pulse_pred: torch.Tensor, fps: float = 15.0,
     Returns mean absolute error against a reference (placeholder: 75 bpm average).
     In real usage, compare against rPPG algorithm's BPM estimate.
     """
+    pulse_pred = pulse_pred.float()  # rfft does not support fp16
     T = pulse_pred.shape[-1]
     freqs = torch.fft.rfftfreq(T, d=1.0 / fps)
     fft_mag = torch.abs(torch.fft.rfft(pulse_pred, dim=-1))
@@ -94,6 +95,18 @@ def compute_hr_mae(pulse_pred: torch.Tensor, fps: float = 15.0,
         peak_freqs.append(peak_freq.item() * 60.0)
 
     return float(np.std(peak_freqs))  # BPM variance as proxy metric (lower = more consistent)
+
+
+def warmup_cache(dataset, num_workers: int = 2):
+    """Pre-extract and cache all rPPG/blink features so MediaPipe runs only once."""
+    from torch.utils.data import DataLoader
+    print(f"\n── Pre-caching physiological features for {len(dataset)} videos ──")
+    print("   (MediaPipe runs once here; subsequent epochs load from disk cache)")
+    loader = DataLoader(dataset, batch_size=1, shuffle=False,
+                        num_workers=num_workers, pin_memory=False)
+    for i, _ in enumerate(tqdm(loader, desc="Caching features", leave=False)):
+        pass
+    print(f"   ✓ Cached {i+1} videos\n")
 
 
 def pretrain(args):
@@ -114,6 +127,9 @@ def pretrain(args):
     dataset = build_real_only_dataset(
         args.ff_root, args.cache_dir, args.clip_len, args.img_size
     )
+
+    # Pre-cache all features (MediaPipe CPU extraction) before training
+    warmup_cache(dataset, num_workers=args.num_workers)
     n_val = max(10, int(len(dataset) * 0.1))
     train_ds, val_ds = torch.utils.data.random_split(
         dataset, [len(dataset) - n_val, n_val],
@@ -279,7 +295,7 @@ def parse_args():
     # Model
     p.add_argument("--backbone", default="efficientnet_b4")
     p.add_argument("--temporal_model", default="transformer", choices=["transformer", "lstm", "mamba"])
-    p.add_argument("--clip_len", type=int, default=64)
+    p.add_argument("--clip_len", type=int, default=32)
     p.add_argument("--img_size", type=int, default=224)
     p.add_argument("--fps", type=float, default=15.0)
 

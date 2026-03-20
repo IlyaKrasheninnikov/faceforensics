@@ -98,22 +98,27 @@ class FrameEncoder(nn.Module):
             )
             self.out_dim = 64
 
-    def forward(self, x: torch.Tensor, chunk_size: int = 16) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, chunk_size: int = 8) -> torch.Tensor:
         """
         x: (B, T, C, H, W)
         returns: (B, T, D)
 
         Processes frames in chunks to avoid OOM on long clips.
+        Uses gradient checkpointing to save memory when training.
         """
         B, T, C, H, W = x.shape
         x = x.view(B * T, C, H, W)
-        if B * T <= chunk_size:
-            feat = self.encoder(x)
-        else:
-            feats = []
-            for i in range(0, B * T, chunk_size):
-                feats.append(self.encoder(x[i:i + chunk_size]))
-            feat = torch.cat(feats, dim=0)
+        feats = []
+        for i in range(0, B * T, chunk_size):
+            chunk = x[i:i + chunk_size]
+            if self.training and chunk.requires_grad:
+                feat_chunk = torch.utils.checkpoint.checkpoint(
+                    self.encoder, chunk, use_reentrant=False
+                )
+            else:
+                feat_chunk = self.encoder(chunk)
+            feats.append(feat_chunk)
+        feat = torch.cat(feats, dim=0)
         return feat.view(B, T, -1)       # (B, T, D)
 
 
