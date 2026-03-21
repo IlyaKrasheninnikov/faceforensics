@@ -149,13 +149,17 @@ def evaluate(
 
         with torch.cuda.amp.autocast(enabled=(scaler is not None)):
             outputs = model(frames, rppg_feat, blink_feat)
-            probs = torch.sigmoid(outputs["logit"]).cpu().numpy()
+            # Cast to float32 before sigmoid to avoid fp16 overflow → NaN
+            probs = torch.sigmoid(outputs["logit"].float()).cpu().numpy()
 
         all_scores.extend(probs.tolist())
         all_labels.extend(label.tolist())
 
     all_scores = np.array(all_scores)
     all_labels = np.array(all_labels)
+
+    # Replace any remaining NaN/Inf with 0.5 (neutral prediction)
+    all_scores = np.nan_to_num(all_scores, nan=0.5, posinf=1.0, neginf=0.0)
 
     metrics = compute_metrics(all_scores, all_labels)
     return metrics

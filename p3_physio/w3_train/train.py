@@ -76,7 +76,10 @@ def train(args):
     )
 
     # Pre-cache all features (rPPG + blink via MediaPipe) before GPU training
-    warmup_cache(train_dl.dataset, num_workers=args.num_workers)
+    if not args.skip_cache:
+        warmup_cache(train_dl.dataset, num_workers=args.num_workers)
+    else:
+        print("Skipping feature cache warmup (--skip_cache)")
 
     # ─── Model ────────────────────────────────────────────────────────────────
     cfg = ModelConfig(
@@ -136,9 +139,25 @@ def train(args):
     out_dir.mkdir(parents=True, exist_ok=True)
     best_val_auc = 0.0
     global_step = 0
+    start_epoch = 1
+
+    # Resume from latest checkpoint if --resume
+    if args.resume and (out_dir / "latest.pt").exists():
+        resume_ckpt = torch.load(out_dir / "latest.pt", map_location=device)
+        model.load_state_dict(resume_ckpt["model_state_dict"])
+        if "optimizer_state_dict" in resume_ckpt:
+            optimizer.load_state_dict(resume_ckpt["optimizer_state_dict"])
+        start_epoch = resume_ckpt.get("epoch", 0) + 1
+        best_val_auc = resume_ckpt.get("val_auc", 0.0)
+        # Fast-forward scheduler
+        steps_to_skip = len(train_dl) * (start_epoch - 1)
+        for _ in range(steps_to_skip):
+            scheduler.step()
+        global_step = steps_to_skip
+        print(f"Resumed from epoch {start_epoch - 1}, best_val_auc={best_val_auc:.4f}")
 
     # ─── Training Loop ────────────────────────────────────────────────────────
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(start_epoch, args.epochs + 1):
 
         # Unfreeze backbone after warmup
         if epoch == 3:
@@ -227,6 +246,7 @@ def train(args):
             "epoch": epoch,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "val_auc": val_auc,
         }, out_dir / "latest.pt")
 
     # ─── Final test evaluation ─────────────────────────────────────────────────
@@ -250,6 +270,8 @@ def parse_args():
     p.add_argument("--celebdf_root", default=None)
     p.add_argument("--dfdc_root", default=None)
     p.add_argument("--pretrain_ckpt", default=None)
+    p.add_argument("--resume", action="store_true", help="Resume from latest.pt checkpoint")
+    p.add_argument("--skip_cache", action="store_true", help="Skip feature cache warmup (use if already cached)")
     p.add_argument("--out_dir", default="./checkpoints")
     p.add_argument("--cache_dir", default="./logs/signal_cache")
     p.add_argument("--log_dir", default="./logs")
