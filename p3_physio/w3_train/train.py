@@ -107,6 +107,14 @@ def train(args):
     params = model.get_num_params()
     print(f"Model: {params['total']/1e6:.1f}M total, {params['trainable']/1e6:.1f}M trainable")
 
+    # ─── Verify learning rates ───────────────────────────────────────────────
+    print(f"Learning rates: backbone={args.lr_backbone}, head={args.lr_head}, temporal={args.lr_temporal}")
+    print(f"Loss weights: cls={args.w_class}, pulse={args.w_pulse}, blink={args.w_blink}, contrastive={args.w_contrastive}")
+    if args.lr_head == 0:
+        print("[FATAL] lr_head is 0 — model will not learn. Check your command-line args!")
+        print("  Hint: use dots not commas for decimals (0.4 not 0,4)")
+        raise ValueError("lr_head cannot be 0")
+
     # ─── Loss ─────────────────────────────────────────────────────────────────
     criterion = PhysioMultiTaskLoss(
         w_class=args.w_class,
