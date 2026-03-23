@@ -94,15 +94,17 @@ def train(args):
     model = PhysioNet(cfg).to(device)
 
     if args.pretrain_ckpt and Path(args.pretrain_ckpt).exists():
-        ckpt = torch.load(args.pretrain_ckpt, map_location=device)
+        ckpt = torch.load(args.pretrain_ckpt, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"], strict=False)
         print(f"Loaded pretrain checkpoint: {args.pretrain_ckpt}")
     else:
         print("Training from scratch (no pretrain checkpoint)")
 
-    # Freeze backbone for first N epochs
-    model.freeze_backbone(freeze=True)
-    print("Backbone frozen for first 2 epochs")
+    # FIX: Train end-to-end from the start — do NOT freeze backbone.
+    # Previous approach froze backbone for 2 epochs, but with random/pretrain features
+    # the heads learned the trivial "always predict fake" solution and never recovered.
+    model.freeze_backbone(freeze=False)
+    print("Training end-to-end (backbone NOT frozen)")
 
     params = model.get_num_params()
     print(f"Model: {params['total']/1e6:.1f}M total, {params['trainable']/1e6:.1f}M trainable")
@@ -116,12 +118,26 @@ def train(args):
         raise ValueError("lr_head cannot be 0")
 
     # ─── Loss ─────────────────────────────────────────────────────────────────
+    # FIX: Auto-compute pos_weight from class ratio to prevent "always predict fake" collapse.
+    # With 87% fake data and pos_weight=1.0, the model gets low loss by predicting all-fake.
+    # pos_weight > 1 makes missing a REAL sample much more expensive.
+    effective_pos_weight = args.pos_weight
+    if hasattr(train_dl, 'class_ratio') and train_dl.class_ratio > 1.5:
+        auto_pw = train_dl.class_ratio  # e.g. ~6.7 for 87% fake
+        if args.pos_weight == 1.0:
+            # User didn't set it manually — use auto value
+            effective_pos_weight = auto_pw
+            print(f"Auto pos_weight={effective_pos_weight:.2f} (fake/real ratio={train_dl.class_ratio:.2f})")
+        else:
+            print(f"Using manual pos_weight={args.pos_weight} (class_ratio={train_dl.class_ratio:.2f})")
+    print(f"Effective pos_weight={effective_pos_weight:.2f}")
+
     criterion = PhysioMultiTaskLoss(
         w_class=args.w_class,
         w_pulse=args.w_pulse,
         w_blink=args.w_blink,
         w_contrastive=args.w_contrastive,
-        pos_weight=args.pos_weight,
+        pos_weight=effective_pos_weight,
     )
 
     # ─── Optimizer ────────────────────────────────────────────────────────────
@@ -137,8 +153,13 @@ def train(args):
 
     total_steps = len(train_dl) * args.epochs
     warmup_steps = len(train_dl) * args.warmup_epochs
+    # FIX: Per-group max_lr so backbone gets lower LR than heads.
+    # Previously used single max_lr which ramped backbone to 1e-4 (10x too high).
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=args.lr_head, total_steps=total_steps,
+        optimizer,
+        max_lr=[args.lr_backbone, args.lr_head, args.lr_temporal,
+                args.lr_head, args.lr_head, args.lr_head, args.lr_head],
+        total_steps=total_steps,
         pct_start=warmup_steps / total_steps, anneal_strategy="cos",
     )
 
@@ -151,7 +172,7 @@ def train(args):
 
     # Resume from latest checkpoint if --resume
     if args.resume and (out_dir / "latest.pt").exists():
-        resume_ckpt = torch.load(out_dir / "latest.pt", map_location=device)
+        resume_ckpt = torch.load(out_dir / "latest.pt", map_location=device, weights_only=False)
         model.load_state_dict(resume_ckpt["model_state_dict"])
         if "optimizer_state_dict" in resume_ckpt:
             optimizer.load_state_dict(resume_ckpt["optimizer_state_dict"])
@@ -167,13 +188,10 @@ def train(args):
     # ─── Training Loop ────────────────────────────────────────────────────────
     for epoch in range(start_epoch, args.epochs + 1):
 
-        # Unfreeze backbone after warmup
-        if epoch == 3:
-            model.freeze_backbone(freeze=False)
-            print(f"Epoch {epoch}: Backbone unfrozen")
-
         model.train()
         epoch_losses = {k: [] for k in ["total", "cls", "pulse", "blink", "contrastive"]}
+        # Track predictions for collapse detection
+        epoch_preds = []
 
         for batch in tqdm(train_dl, desc=f"Epoch {epoch}/{args.epochs}", leave=False):
             frames = batch["frames"].to(device)
@@ -207,6 +225,11 @@ def train(args):
                 if k in epoch_losses:
                     epoch_losses[k].append(v.item() if torch.is_tensor(v) else float(v))
 
+            # Collect predictions for collapse detection
+            with torch.no_grad():
+                probs = torch.sigmoid(outputs["logit"].float()).cpu().numpy()
+                epoch_preds.extend(probs.tolist())
+
             global_step += 1
             if global_step % args.log_interval == 0:
                 logger.log({
@@ -216,6 +239,17 @@ def train(args):
                     "step/loss_blink": losses["blink"].item() if torch.is_tensor(losses["blink"]) else losses["blink"],
                 }, step=global_step)
 
+        # ─── Collapse detection ──────────────────────────────────────────────
+        epoch_preds_arr = np.array(epoch_preds)
+        pred_mean = epoch_preds_arr.mean()
+        pred_std = epoch_preds_arr.std()
+        frac_above_05 = (epoch_preds_arr > 0.5).mean()
+        print(f"  [Collapse check] pred_mean={pred_mean:.3f} pred_std={pred_std:.3f} "
+              f"frac_fake={frac_above_05:.3f}")
+        if pred_std < 0.05:
+            print(f"  *** WARNING: Prediction collapse detected! std={pred_std:.4f} "
+                  f"(all predictions ~{pred_mean:.2f}). Model is not discriminating. ***")
+
         # ─── Validation ───────────────────────────────────────────────────────
         val_metrics = evaluate(model, val_dl, device, scaler, split="val")
 
@@ -224,6 +258,8 @@ def train(args):
             **{f"train/{k}": np.mean(v) for k, v in epoch_losses.items() if v},
             **{f"val/{k}": v for k, v in val_metrics.items()},
             "lr": scheduler.get_last_lr()[0],
+            "train/pred_mean": float(pred_mean),
+            "train/pred_std": float(pred_std),
         }
         logger.log(metrics, step=epoch)
 
@@ -258,7 +294,8 @@ def train(args):
         }, out_dir / "latest.pt")
 
     # ─── Final test evaluation ─────────────────────────────────────────────────
-    best_ckpt = torch.load(out_dir / "best_model.pt", map_location=device)
+    # FIX: weights_only=False for PyTorch 2.6 (ModelConfig is a custom class)
+    best_ckpt = torch.load(out_dir / "best_model.pt", map_location=device, weights_only=False)
     model.load_state_dict(best_ckpt["model_state_dict"])
     test_metrics = evaluate(model, test_dl, device, scaler, split="test")
 
@@ -310,7 +347,8 @@ def parse_args():
     p.add_argument("--w_pulse", type=float, default=0.4)
     p.add_argument("--w_blink", type=float, default=0.3)
     p.add_argument("--w_contrastive", type=float, default=0.1)
-    p.add_argument("--pos_weight", type=float, default=1.0)
+    p.add_argument("--pos_weight", type=float, default=1.0,
+                   help="BCE pos_weight for real class. Default=1.0 triggers auto-compute from class ratio.")
 
     return p.parse_args()
 

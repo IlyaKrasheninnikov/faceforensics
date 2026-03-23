@@ -425,9 +425,15 @@ def build_dataloaders(
     weights = np.where(train_labels_arr == 0, 1.0 / (n_real + 1), 1.0 / (n_fake + 1))
     sampler = WeightedRandomSampler(weights, len(weights), replacement=True)
 
-    train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, num_workers=num_workers, pin_memory=True)
+    # drop_last=True avoids partial batches (important with small batch sizes)
+    train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, num_workers=num_workers, pin_memory=True, drop_last=True)
     val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
     test_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
 
+    # Expose class ratio so train.py can auto-compute pos_weight
+    n_real_int, n_fake_int = int(n_real), int(n_fake)
+    train_dl.class_ratio = n_fake_int / max(n_real_int, 1)
+
     print(f"\nDataset splits: train={len(train_ds)} | val={len(val_ds)} | test={len(test_ds)}")
+    print(f"Class balance: {n_real_int} real / {n_fake_int} fake (ratio={train_dl.class_ratio:.2f})")
     return train_dl, val_dl, test_dl
