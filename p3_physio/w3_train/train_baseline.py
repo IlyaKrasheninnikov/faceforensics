@@ -177,19 +177,47 @@ def train(args):
     paths, labels = build_video_list(args.ff_root)
     print(f"\nTotal: {len(paths)} videos, real={labels.count(0)}, fake={labels.count(1)}")
 
-    # Shuffle + split
-    combined = list(zip(paths, labels))
-    random.shuffle(combined)
-    paths, labels = zip(*combined)
-    paths, labels = list(paths), list(labels)
+    # ── Identity-aware split ──────────────────────────────────────────
+    # FF++ videos from the same source person (e.g. original/000.mp4
+    # and Deepfakes/000_003.mp4) must ALL go into the same split.
+    # Without this, the model learns face identity, not manipulation.
+    id_to_indices = {}
+    for i, p in enumerate(paths):
+        src_id = Path(p).stem.split("_")[0]  # "000_003" → "000"
+        id_to_indices.setdefault(src_id, []).append(i)
 
-    n = len(paths)
-    n_train = int(n * 0.8)
-    n_val = int(n * 0.1)
+    unique_ids = sorted(id_to_indices.keys())
+    random.shuffle(unique_ids)
 
-    train_paths, train_labels = paths[:n_train], labels[:n_train]
-    val_paths, val_labels = paths[n_train:n_train+n_val], labels[n_train:n_train+n_val]
-    test_paths, test_labels = paths[n_train+n_val:], labels[n_train+n_val:]
+    n_ids = len(unique_ids)
+    n_train_ids = int(n_ids * 0.8)
+    n_val_ids = int(n_ids * 0.1)
+
+    train_ids = set(unique_ids[:n_train_ids])
+    val_ids = set(unique_ids[n_train_ids:n_train_ids + n_val_ids])
+
+    train_idx, val_idx, test_idx = [], [], []
+    for src_id, indices in id_to_indices.items():
+        if src_id in train_ids:
+            train_idx.extend(indices)
+        elif src_id in val_ids:
+            val_idx.extend(indices)
+        else:
+            test_idx.extend(indices)
+
+    random.shuffle(train_idx)
+    random.shuffle(val_idx)
+    random.shuffle(test_idx)
+
+    train_paths = [paths[i] for i in train_idx]
+    train_labels = [labels[i] for i in train_idx]
+    val_paths = [paths[i] for i in val_idx]
+    val_labels = [labels[i] for i in val_idx]
+    test_paths = [paths[i] for i in test_idx]
+    test_labels = [labels[i] for i in test_idx]
+
+    print(f"Identity-aware split: {n_train_ids}/{n_val_ids}/{n_ids - n_train_ids - n_val_ids} "
+          f"source IDs (no identity overlap between splits)")
 
     train_ds = FrameDataset(train_paths, train_labels, args.img_size)
     val_ds = FrameDataset(val_paths, val_labels, args.img_size)

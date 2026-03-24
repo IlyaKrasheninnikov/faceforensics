@@ -370,6 +370,22 @@ def build_celebdf_list(celebdf_root: str) -> Tuple[List, List]:
     return video_paths, labels
 
 
+def _extract_source_id(video_path: str) -> str:
+    """Extract source identity from FF++ video filename.
+
+    FF++ naming conventions:
+      original/000.mp4           → source id "000"
+      Deepfakes/000_003.mp4      → source id "000"
+      Face2Face/000.mp4           → source id "000"
+      FaceSwap/000_003.mp4        → source id "000"
+
+    The first numeric part before '_' (or the whole stem) is the source identity.
+    All manipulations of the same source person share this ID.
+    """
+    stem = Path(video_path).stem  # e.g. "000_003" or "000"
+    return stem.split("_")[0]
+
+
 def build_dataloaders(
     ff_root: Optional[str] = None,
     celebdf_root: Optional[str] = None,
@@ -384,7 +400,13 @@ def build_dataloaders(
     seed: int = 42,
     augment_train: bool = True,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    """Build train/val/test dataloaders from available datasets."""
+    """Build train/val/test dataloaders with IDENTITY-AWARE splitting.
+
+    Critical: FF++ videos from the same source person (e.g. original/000.mp4
+    and Deepfakes/000_003.mp4) must ALL go into the same split. Otherwise the
+    model learns face identity instead of manipulation artifacts, causing
+    val AUC < 0.5 (anti-learning).
+    """
     random.seed(seed)
     np.random.seed(seed)
 
@@ -403,23 +425,54 @@ def build_dataloaders(
     if not all_paths:
         raise ValueError("No datasets found! Provide at least one of: ff_root, celebdf_root, dfdc_root")
 
-    # Shuffle
-    combined = list(zip(all_paths, all_labels))
-    random.shuffle(combined)
-    all_paths, all_labels = zip(*combined)
-    all_paths, all_labels = list(all_paths), list(all_labels)
+    # ── Identity-aware split ──────────────────────────────────────────────
+    # Group videos by source identity so the same person's real + fake
+    # versions all land in the same split (prevents identity leakage).
+    id_to_indices = {}
+    for i, path in enumerate(all_paths):
+        src_id = _extract_source_id(path)
+        id_to_indices.setdefault(src_id, []).append(i)
 
-    # Split
-    N = len(all_paths)
-    n_train = int(N * train_split)
-    n_val = int(N * val_split)
+    unique_ids = sorted(id_to_indices.keys())
+    random.shuffle(unique_ids)
 
-    train_ds = PhysioDeepfakeDataset(all_paths[:n_train], all_labels[:n_train], clip_len, img_size, augment=augment_train, cache_dir=cache_dir)
-    val_ds = PhysioDeepfakeDataset(all_paths[n_train:n_train+n_val], all_labels[n_train:n_train+n_val], clip_len, img_size, augment=False, cache_dir=cache_dir)
-    test_ds = PhysioDeepfakeDataset(all_paths[n_train+n_val:], all_labels[n_train+n_val:], clip_len, img_size, augment=False, cache_dir=cache_dir)
+    n_ids = len(unique_ids)
+    n_train_ids = int(n_ids * train_split)
+    n_val_ids = int(n_ids * val_split)
+
+    train_ids = set(unique_ids[:n_train_ids])
+    val_ids = set(unique_ids[n_train_ids:n_train_ids + n_val_ids])
+    test_ids = set(unique_ids[n_train_ids + n_val_ids:])
+
+    train_idx, val_idx, test_idx = [], [], []
+    for src_id, indices in id_to_indices.items():
+        if src_id in train_ids:
+            train_idx.extend(indices)
+        elif src_id in val_ids:
+            val_idx.extend(indices)
+        else:
+            test_idx.extend(indices)
+
+    random.shuffle(train_idx)
+    random.shuffle(val_idx)
+    random.shuffle(test_idx)
+
+    train_paths = [all_paths[i] for i in train_idx]
+    train_labels = [all_labels[i] for i in train_idx]
+    val_paths = [all_paths[i] for i in val_idx]
+    val_labels = [all_labels[i] for i in val_idx]
+    test_paths = [all_paths[i] for i in test_idx]
+    test_labels = [all_labels[i] for i in test_idx]
+
+    print(f"\nIdentity-aware split: {n_train_ids} train / {n_val_ids} val / {len(test_ids)} test source IDs")
+    print(f"  (no identity overlap between splits)")
+
+    train_ds = PhysioDeepfakeDataset(train_paths, train_labels, clip_len, img_size, augment=augment_train, cache_dir=cache_dir)
+    val_ds = PhysioDeepfakeDataset(val_paths, val_labels, clip_len, img_size, augment=False, cache_dir=cache_dir)
+    test_ds = PhysioDeepfakeDataset(test_paths, test_labels, clip_len, img_size, augment=False, cache_dir=cache_dir)
 
     # Balanced sampler for training
-    train_labels_arr = np.array(all_labels[:n_train])
+    train_labels_arr = np.array(train_labels)
     n_real = (train_labels_arr == 0).sum()
     n_fake = (train_labels_arr == 1).sum()
     weights = np.where(train_labels_arr == 0, 1.0 / (n_real + 1), 1.0 / (n_fake + 1))
@@ -434,6 +487,6 @@ def build_dataloaders(
     n_real_int, n_fake_int = int(n_real), int(n_fake)
     train_dl.class_ratio = n_fake_int / max(n_real_int, 1)
 
-    print(f"\nDataset splits: train={len(train_ds)} | val={len(val_ds)} | test={len(test_ds)}")
+    print(f"Dataset splits: train={len(train_ds)} | val={len(val_ds)} | test={len(test_ds)}")
     print(f"Class balance: {n_real_int} real / {n_fake_int} fake (ratio={train_dl.class_ratio:.2f})")
     return train_dl, val_dl, test_dl
