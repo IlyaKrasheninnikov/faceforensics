@@ -235,6 +235,7 @@ class PhysioDeepfakeDataset(Dataset):
         img_size: int = 224,
         fps: float = 15.0,
         cache_dir: str = "./logs/signal_cache",
+        fallback_cache_dirs: Optional[List[str]] = None,
         augment: bool = True,
         pulse_strip_prob: float = 0.3,
         blink_freeze_prob: float = 0.2,
@@ -249,6 +250,8 @@ class PhysioDeepfakeDataset(Dataset):
         self.fps = fps
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # Fallback: read-only cache dirs (e.g. Kaggle /kaggle/input/...)
+        self._fallback_cache_dirs = [Path(d) for d in (fallback_cache_dirs or []) if Path(d).exists()]
         self.augment = augment
         self.pulse_strip_prob = pulse_strip_prob
         self.blink_freeze_prob = blink_freeze_prob
@@ -262,22 +265,40 @@ class PhysioDeepfakeDataset(Dataset):
         name = Path(video_path).stem
         return self.cache_dir / f"{name}_{suffix}.npy"
 
+    def _find_cache(self, video_path: str, suffix: str) -> Optional[Path]:
+        """Check primary cache_dir, then any fallback read-only cache dirs."""
+        primary = self._cache_path(video_path, suffix)
+        if primary.exists():
+            return primary
+        # Check fallback dirs (e.g. Kaggle read-only input datasets)
+        for fb in self._fallback_cache_dirs:
+            candidate = fb / f"{Path(video_path).stem}_{suffix}.npy"
+            if candidate.exists():
+                return candidate
+        return None
+
     def _get_rppg_feat(self, video_path: str, frames: np.ndarray) -> np.ndarray:
-        cache = self._cache_path(video_path, "rppg")
-        if cache.exists():
-            return np.load(str(cache))
+        cached = self._find_cache(video_path, "rppg")
+        if cached is not None:
+            return np.load(str(cached))
         feat = frames_to_rppg_feature(frames, self.fps, self.rppg_feat_dim)
-        np.save(str(cache), feat)
+        try:
+            np.save(str(self._cache_path(video_path, "rppg")), feat)
+        except OSError:
+            pass  # read-only filesystem, skip caching
         return feat
 
     def _get_blink_data(self, video_path: str) -> Tuple[np.ndarray, np.ndarray]:
-        cache_feat = self._cache_path(video_path, "blink_feat")
-        cache_labels = self._cache_path(video_path, "blink_labels")
-        if cache_feat.exists() and cache_labels.exists():
-            return np.load(str(cache_feat)), np.load(str(cache_labels))
+        cached_feat = self._find_cache(video_path, "blink_feat")
+        cached_labels = self._find_cache(video_path, "blink_labels")
+        if cached_feat is not None and cached_labels is not None:
+            return np.load(str(cached_feat)), np.load(str(cached_labels))
         feat, labels = frames_to_blink_feature(video_path, self.fps)
-        np.save(str(cache_feat), feat)
-        np.save(str(cache_labels), labels)
+        try:
+            np.save(str(self._cache_path(video_path, "blink_feat")), feat)
+            np.save(str(self._cache_path(video_path, "blink_labels")), labels)
+        except OSError:
+            pass  # read-only filesystem, skip caching
         return feat, labels
 
     def __getitem__(self, idx: int) -> Dict:
@@ -391,6 +412,7 @@ def build_dataloaders(
     celebdf_root: Optional[str] = None,
     dfdc_root: Optional[str] = None,
     cache_dir: str = "./logs/signal_cache",
+    fallback_cache_dirs: Optional[List[str]] = None,
     clip_len: int = 64,
     img_size: int = 224,
     batch_size: int = 8,
@@ -467,9 +489,10 @@ def build_dataloaders(
     print(f"\nIdentity-aware split: {n_train_ids} train / {n_val_ids} val / {len(test_ids)} test source IDs")
     print(f"  (no identity overlap between splits)")
 
-    train_ds = PhysioDeepfakeDataset(train_paths, train_labels, clip_len, img_size, augment=augment_train, cache_dir=cache_dir)
-    val_ds = PhysioDeepfakeDataset(val_paths, val_labels, clip_len, img_size, augment=False, cache_dir=cache_dir)
-    test_ds = PhysioDeepfakeDataset(test_paths, test_labels, clip_len, img_size, augment=False, cache_dir=cache_dir)
+    fb = fallback_cache_dirs
+    train_ds = PhysioDeepfakeDataset(train_paths, train_labels, clip_len, img_size, augment=augment_train, cache_dir=cache_dir, fallback_cache_dirs=fb)
+    val_ds = PhysioDeepfakeDataset(val_paths, val_labels, clip_len, img_size, augment=False, cache_dir=cache_dir, fallback_cache_dirs=fb)
+    test_ds = PhysioDeepfakeDataset(test_paths, test_labels, clip_len, img_size, augment=False, cache_dir=cache_dir, fallback_cache_dirs=fb)
 
     # Balanced sampler for training
     train_labels_arr = np.array(train_labels)

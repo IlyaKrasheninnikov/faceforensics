@@ -63,10 +63,12 @@ def train(args):
     )
 
     # ─── Data ─────────────────────────────────────────────────────────────────
+    fallback = [d for d in (args.fallback_cache_dir or []) if Path(d).exists()]
     train_dl, val_dl, test_dl = build_dataloaders(
         ff_root=args.ff_root,
         celebdf_root=args.celebdf_root,
         cache_dir=args.cache_dir,
+        fallback_cache_dirs=fallback or None,
         clip_len=args.clip_len,
         img_size=args.img_size,
         batch_size=args.batch_size,
@@ -319,6 +321,8 @@ def parse_args():
     p.add_argument("--skip_cache", action="store_true", help="Skip feature cache warmup (use if already cached)")
     p.add_argument("--out_dir", default="./checkpoints")
     p.add_argument("--cache_dir", default="./logs/signal_cache")
+    p.add_argument("--fallback_cache_dir", nargs="*", default=None,
+                   help="Read-only cache dirs to check before recomputing features (e.g. Kaggle input datasets)")
     p.add_argument("--log_dir", default="./logs")
     p.add_argument("--run_name", default=None)
 
