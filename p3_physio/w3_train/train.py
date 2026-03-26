@@ -134,15 +134,26 @@ def train(args):
     )
 
     # ─── Optimizer ────────────────────────────────────────────────────────────
-    optimizer = torch.optim.AdamW([
-        {"params": model.frame_encoder.parameters(), "lr": args.lr_backbone},
-        {"params": model.temporal_proj.parameters(), "lr": args.lr_head},
-        {"params": model.temporal.parameters(), "lr": args.lr_temporal},
-        {"params": model.cls_head.parameters(), "lr": args.lr_head},
-        {"params": model.fusion.parameters(), "lr": args.lr_head},
-        {"params": model.pulse_head.parameters(), "lr": args.lr_head},
-        {"params": model.blink_head.parameters(), "lr": args.lr_head},
-    ], weight_decay=args.weight_decay)
+    if isinstance(model, torch.nn.DataParallel):
+        optimizer = torch.optim.AdamW([
+            {"params": model.module.frame_encoder.parameters(), "lr": args.lr_backbone},
+            {"params": model.module.temporal_proj.parameters(), "lr": args.lr_head},
+            {"params": model.module.temporal.parameters(), "lr": args.lr_temporal},
+            {"params": model.module.cls_head.parameters(), "lr": args.lr_head},
+            {"params": model.module.fusion.parameters(), "lr": args.lr_head},
+            {"params": model.module.pulse_head.parameters(), "lr": args.lr_head},
+            {"params": model.module.blink_head.parameters(), "lr": args.lr_head},
+        ], weight_decay=args.weight_decay)
+    else:
+        optimizer = torch.optim.AdamW([
+            {"params": model.frame_encoder.parameters(), "lr": args.lr_backbone},
+            {"params": model.temporal_proj.parameters(), "lr": args.lr_head},
+            {"params": model.temporal.parameters(), "lr": args.lr_temporal},
+            {"params": model.cls_head.parameters(), "lr": args.lr_head},
+            {"params": model.fusion.parameters(), "lr": args.lr_head},
+            {"params": model.pulse_head.parameters(), "lr": args.lr_head},
+            {"params": model.blink_head.parameters(), "lr": args.lr_head},
+        ], weight_decay=args.weight_decay)
 
     total_steps = len(train_dl) * args.epochs
     warmup_steps = len(train_dl) * args.warmup_epochs
