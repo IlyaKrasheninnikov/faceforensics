@@ -120,26 +120,17 @@ def train(args):
         raise ValueError("lr_head cannot be 0")
 
     # ─── Loss ─────────────────────────────────────────────────────────────────
-    # FIX: Auto-compute pos_weight from class ratio to prevent "always predict fake" collapse.
-    # With 87% fake data and pos_weight=1.0, the model gets low loss by predicting all-fake.
-    # pos_weight > 1 makes missing a REAL sample much more expensive.
-    effective_pos_weight = args.pos_weight
-    if hasattr(train_dl, 'class_ratio') and train_dl.class_ratio > 1.5:
-        auto_pw = train_dl.class_ratio  # e.g. ~6.7 for 87% fake
-        if args.pos_weight == 1.0:
-            # User didn't set it manually — use auto value
-            effective_pos_weight = auto_pw
-            print(f"Auto pos_weight={effective_pos_weight:.2f} (fake/real ratio={train_dl.class_ratio:.2f})")
-        else:
-            print(f"Using manual pos_weight={args.pos_weight} (class_ratio={train_dl.class_ratio:.2f})")
-    print(f"Effective pos_weight={effective_pos_weight:.2f}")
+    # WeightedRandomSampler already balances batches to ~50/50 real/fake.
+    # No additional pos_weight needed — it was previously causing collapse by
+    # applying 5.94x weight to fakes (majority class), training model to predict all-fake.
+    print(f"pos_weight={args.pos_weight} (1.0 = no reweighting, sampler handles balance)")
 
     criterion = PhysioMultiTaskLoss(
         w_class=args.w_class,
         w_pulse=args.w_pulse,
         w_blink=args.w_blink,
         w_contrastive=args.w_contrastive,
-        pos_weight=effective_pos_weight,
+        pos_weight=args.pos_weight,
     )
 
     # ─── Optimizer ────────────────────────────────────────────────────────────
@@ -157,13 +148,8 @@ def train(args):
     warmup_steps = len(train_dl) * args.warmup_epochs
     # FIX: Per-group max_lr so backbone gets lower LR than heads.
     # Previously used single max_lr which ramped backbone to 1e-4 (10x too high).
-    scheduler = torch.optim.lr_scheduler.OneCycleLR(
-        optimizer,
-        max_lr=[args.lr_backbone, args.lr_head, args.lr_temporal,
-                args.lr_head, args.lr_head, args.lr_head, args.lr_head],
-        total_steps=total_steps,
-        pct_start=warmup_steps / total_steps, anneal_strategy="cos",
-    )
+    scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0, total_iters=0)
+
 
     scaler = torch.cuda.amp.GradScaler() if args.fp16 and device.type == "cuda" else None
     out_dir = Path(args.out_dir)
@@ -240,6 +226,10 @@ def train(args):
                     "step/loss_pulse": losses["pulse"].item() if torch.is_tensor(losses["pulse"]) else losses["pulse"],
                     "step/loss_blink": losses["blink"].item() if torch.is_tensor(losses["blink"]) else losses["blink"],
                 }, step=global_step)
+
+            real_count = (label == 0).sum().item()
+            fake_count = (label == 1).sum().item()
+            print(f"Batch: real={real_count}, fake={fake_count}")
 
         # ─── Collapse detection ──────────────────────────────────────────────
         epoch_preds_arr = np.array(epoch_preds)
