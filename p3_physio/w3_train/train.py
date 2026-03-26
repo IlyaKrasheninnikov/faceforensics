@@ -147,15 +147,18 @@ def train(args):
     else:
         base_model = model
 
-    optimizer = torch.optim.AdamW([
+    param_groups = [
         {"params": base_model.frame_encoder.parameters(), "lr": args.lr_backbone},
         {"params": base_model.temporal_proj.parameters(), "lr": args.lr_head},
         {"params": base_model.temporal.parameters(), "lr": args.lr_temporal},
         {"params": base_model.cls_head.parameters(), "lr": args.lr_head},
         {"params": base_model.fusion.parameters(), "lr": args.lr_head},
-        {"params": base_model.pulse_head.parameters(), "lr": args.lr_head},
-        {"params": base_model.blink_head.parameters(), "lr": args.lr_head},
-    ], weight_decay=args.weight_decay)
+    ]
+    if hasattr(base_model, "pulse_head"):
+        param_groups.append({"params": base_model.pulse_head.parameters(), "lr": args.lr_head})
+    if hasattr(base_model, "blink_head"):
+        param_groups.append({"params": base_model.blink_head.parameters(), "lr": args.lr_head})
+    optimizer = torch.optim.AdamW(param_groups, weight_decay=args.weight_decay)
 
     total_steps = len(train_dl) * args.epochs
     warmup_steps = len(train_dl) * args.warmup_epochs
