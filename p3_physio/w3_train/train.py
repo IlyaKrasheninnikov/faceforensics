@@ -94,6 +94,9 @@ def train(args):
         use_blink_head=True,
     )
     model = PhysioNet(cfg).to(device)
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs")
+        model = torch.nn.DataParallel(model)
 
     if args.pretrain_ckpt and Path(args.pretrain_ckpt).exists():
         ckpt = torch.load(args.pretrain_ckpt, map_location=device, weights_only=False)
@@ -135,25 +138,19 @@ def train(args):
 
     # ─── Optimizer ────────────────────────────────────────────────────────────
     if isinstance(model, torch.nn.DataParallel):
-        optimizer = torch.optim.AdamW([
-            {"params": model.module.frame_encoder.parameters(), "lr": args.lr_backbone},
-            {"params": model.module.temporal_proj.parameters(), "lr": args.lr_head},
-            {"params": model.module.temporal.parameters(), "lr": args.lr_temporal},
-            {"params": model.module.cls_head.parameters(), "lr": args.lr_head},
-            {"params": model.module.fusion.parameters(), "lr": args.lr_head},
-            {"params": model.module.pulse_head.parameters(), "lr": args.lr_head},
-            {"params": model.module.blink_head.parameters(), "lr": args.lr_head},
-        ], weight_decay=args.weight_decay)
+        base_model = model.module
     else:
-        optimizer = torch.optim.AdamW([
-            {"params": model.frame_encoder.parameters(), "lr": args.lr_backbone},
-            {"params": model.temporal_proj.parameters(), "lr": args.lr_head},
-            {"params": model.temporal.parameters(), "lr": args.lr_temporal},
-            {"params": model.cls_head.parameters(), "lr": args.lr_head},
-            {"params": model.fusion.parameters(), "lr": args.lr_head},
-            {"params": model.pulse_head.parameters(), "lr": args.lr_head},
-            {"params": model.blink_head.parameters(), "lr": args.lr_head},
-        ], weight_decay=args.weight_decay)
+        base_model = model
+
+    optimizer = torch.optim.AdamW([
+        {"params": base_model.frame_encoder.parameters(), "lr": args.lr_backbone},
+        {"params": base_model.temporal_proj.parameters(), "lr": args.lr_head},
+        {"params": base_model.temporal.parameters(), "lr": args.lr_temporal},
+        {"params": base_model.cls_head.parameters(), "lr": args.lr_head},
+        {"params": base_model.fusion.parameters(), "lr": args.lr_head},
+        {"params": base_model.pulse_head.parameters(), "lr": args.lr_head},
+        {"params": base_model.blink_head.parameters(), "lr": args.lr_head},
+    ], weight_decay=args.weight_decay)
 
     total_steps = len(train_dl) * args.epochs
     warmup_steps = len(train_dl) * args.warmup_epochs
@@ -273,7 +270,7 @@ def train(args):
             f"val_eer={val_metrics.get('eer', 0):.4f} "
             f"val_ece={val_metrics.get('ece', 0):.4f}"
         )
-
+        state_dict = model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict()
         # Save best by AUC
         val_auc = val_metrics.get("auc", 0.0)
         if val_auc > best_val_auc:
@@ -281,7 +278,7 @@ def train(args):
             ckpt_path = out_dir / "best_model.pt"
             torch.save({
                 "epoch": epoch,
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": state_dict,
                 "val_auc": val_auc,
                 "config": cfg,
                 "args": vars(args),
@@ -291,7 +288,7 @@ def train(args):
         # Save latest
         torch.save({
             "epoch": epoch,
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": state_dict,
             "optimizer_state_dict": optimizer.state_dict(),
             "val_auc": val_auc,
         }, out_dir / "latest.pt")
