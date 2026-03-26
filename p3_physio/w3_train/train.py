@@ -65,6 +65,7 @@ def train(args):
     # ─── Data ─────────────────────────────────────────────────────────────────
     fallback = [d for d in (args.fallback_cache_dir or []) if Path(d).exists()]
     # Skip physio extraction when features aren't used — saves heavy CPU work
+    print(not args.use_physio_fusion, args.w_pulse == 0, args.w_blink == 0)
     skip_physio = not args.use_physio_fusion and args.w_pulse == 0 and args.w_blink == 0
     if skip_physio:
         print("Skipping physio feature extraction (not used in this config)")
