@@ -241,6 +241,7 @@ class PhysioDeepfakeDataset(Dataset):
         blink_freeze_prob: float = 0.2,
         rppg_feat_dim: int = 128,
         blink_feat_dim: int = 16,
+        skip_physio: bool = False,
     ):
         assert len(video_paths) == len(labels)
         self.video_paths = video_paths
@@ -257,6 +258,7 @@ class PhysioDeepfakeDataset(Dataset):
         self.blink_freeze_prob = blink_freeze_prob
         self.rppg_feat_dim = rppg_feat_dim
         self.blink_feat_dim = blink_feat_dim
+        self.skip_physio = skip_physio  # Skip rPPG/blink extraction (return zeros)
 
     def __len__(self):
         return len(self.video_paths)
@@ -311,15 +313,19 @@ class PhysioDeepfakeDataset(Dataset):
             # Return zeros on error
             frames = np.zeros((self.clip_len, self.img_size, self.img_size, 3), dtype=np.float32)
 
-        # Explicit features
-        rppg_feat = self._get_rppg_feat(video_path, frames)
-        blink_feat, blink_labels = self._get_blink_data(video_path)
-
-        # Align blink labels to clip_len
-        if len(blink_labels) >= self.clip_len:
-            blink_labels = blink_labels[:self.clip_len]
+        # Explicit features (skip heavy MediaPipe extraction when not needed)
+        if self.skip_physio:
+            rppg_feat = np.zeros(self.rppg_feat_dim, dtype=np.float32)
+            blink_feat = np.zeros(self.blink_feat_dim, dtype=np.float32)
+            blink_labels = np.zeros(self.clip_len, dtype=np.float32)
         else:
-            blink_labels = np.pad(blink_labels, (0, self.clip_len - len(blink_labels)))
+            rppg_feat = self._get_rppg_feat(video_path, frames)
+            blink_feat, blink_labels = self._get_blink_data(video_path)
+            # Align blink labels to clip_len
+            if len(blink_labels) >= self.clip_len:
+                blink_labels = blink_labels[:self.clip_len]
+            else:
+                blink_labels = np.pad(blink_labels, (0, self.clip_len - len(blink_labels)))
 
         # Augmentations (only for real samples → relabel as fake)
         aug_label = float(label)
@@ -427,6 +433,7 @@ def build_dataloaders(
     val_split: float = 0.1,
     seed: int = 42,
     augment_train: bool = True,
+    skip_physio: bool = False,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """Build train/val/test dataloaders with IDENTITY-AWARE splitting.
 
@@ -496,9 +503,9 @@ def build_dataloaders(
     print(f"  (no identity overlap between splits)")
 
     fb = fallback_cache_dirs
-    train_ds = PhysioDeepfakeDataset(train_paths, train_labels, clip_len, img_size, augment=augment_train, cache_dir=cache_dir, fallback_cache_dirs=fb)
-    val_ds = PhysioDeepfakeDataset(val_paths, val_labels, clip_len, img_size, augment=False, cache_dir=cache_dir, fallback_cache_dirs=fb)
-    test_ds = PhysioDeepfakeDataset(test_paths, test_labels, clip_len, img_size, augment=False, cache_dir=cache_dir, fallback_cache_dirs=fb)
+    train_ds = PhysioDeepfakeDataset(train_paths, train_labels, clip_len, img_size, augment=augment_train, cache_dir=cache_dir, fallback_cache_dirs=fb, skip_physio=skip_physio)
+    val_ds = PhysioDeepfakeDataset(val_paths, val_labels, clip_len, img_size, augment=False, cache_dir=cache_dir, fallback_cache_dirs=fb, skip_physio=skip_physio)
+    test_ds = PhysioDeepfakeDataset(test_paths, test_labels, clip_len, img_size, augment=False, cache_dir=cache_dir, fallback_cache_dirs=fb, skip_physio=skip_physio)
 
     # Balanced sampler for training
     train_labels_arr = np.array(train_labels)

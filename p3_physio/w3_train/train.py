@@ -64,6 +64,11 @@ def train(args):
 
     # ─── Data ─────────────────────────────────────────────────────────────────
     fallback = [d for d in (args.fallback_cache_dir or []) if Path(d).exists()]
+    # Skip physio extraction when features aren't used — saves heavy CPU work
+    skip_physio = not args.use_physio_fusion and args.w_pulse == 0 and args.w_blink == 0
+    if skip_physio:
+        print("Skipping physio feature extraction (not used in this config)")
+
     train_dl, val_dl, test_dl = build_dataloaders(
         ff_root=args.ff_root,
         celebdf_root=args.celebdf_root,
@@ -75,6 +80,7 @@ def train(args):
         num_workers=args.num_workers,
         seed=args.seed,
         augment_train=True,
+        skip_physio=skip_physio,
     )
 
     # Pre-cache all features (rPPG + blink via MediaPipe) before GPU training
