@@ -90,9 +90,13 @@ def train(args):
         temporal_model=args.temporal_model,
         clip_len=args.clip_len,
         img_size=args.img_size,
-        use_pulse_head=True,
-        use_blink_head=True,
+        use_pulse_head=(args.w_pulse > 0),
+        use_blink_head=(args.w_blink > 0),
+        use_physio_fusion=args.use_physio_fusion,
+        temporal_pool=args.temporal_pool,
     )
+    print(f"Config: physio_fusion={cfg.use_physio_fusion}, temporal_pool={cfg.temporal_pool}, "
+          f"pulse_head={cfg.use_pulse_head}, blink_head={cfg.use_blink_head}")
     model = PhysioNet(cfg).to(device)
     if torch.cuda.device_count() > 1:
         print(f"Using {torch.cuda.device_count()} GPUs")
@@ -108,10 +112,11 @@ def train(args):
     # FIX: Train end-to-end from the start — do NOT freeze backbone.
     # Previous approach froze backbone for 2 epochs, but with random/pretrain features
     # the heads learned the trivial "always predict fake" solution and never recovered.
-    model.freeze_backbone(freeze=False)
+    base_model = model.module if isinstance(model, torch.nn.DataParallel) else model
+    base_model.freeze_backbone(freeze=False)
     print("Training end-to-end (backbone NOT frozen)")
 
-    params = model.get_num_params()
+    params = base_model.get_num_params()
     print(f"Model: {params['total']/1e6:.1f}M total, {params['trainable']/1e6:.1f}M trainable")
 
     # ─── Verify learning rates ───────────────────────────────────────────────
@@ -189,33 +194,63 @@ def train(args):
         # Track predictions for collapse detection
         epoch_preds = []
 
-        for batch in tqdm(train_dl, desc=f"Epoch {epoch}/{args.epochs}", leave=False):
+        accum_steps = args.grad_accum
+        optimizer.zero_grad()
+
+        for batch_idx, batch in enumerate(tqdm(train_dl, desc=f"Epoch {epoch}/{args.epochs}", leave=False)):
             frames = batch["frames"].to(device)
             rppg_feat = batch["rppg_feat"].to(device)
             blink_feat = batch["blink_feat"].to(device)
             blink_labels = batch["blink_labels"].to(device)
             label = batch["label"].to(device)
 
-            optimizer.zero_grad()
+            # One-time diagnostic: print input statistics on first batch of first epoch
+            if epoch == start_epoch and batch_idx == 0:
+                print(f"\n  [DIAG] frames: shape={list(frames.shape)} "
+                      f"mean={frames.mean().item():.3f} std={frames.std().item():.3f} "
+                      f"min={frames.min().item():.3f} max={frames.max().item():.3f}")
+                print(f"  [DIAG] rppg_feat: shape={list(rppg_feat.shape)} "
+                      f"mean={rppg_feat.mean().item():.3f} std={rppg_feat.std().item():.3f} "
+                      f"norm={rppg_feat.norm(dim=-1).mean().item():.3f}")
+                print(f"  [DIAG] blink_feat: shape={list(blink_feat.shape)} "
+                      f"mean={blink_feat.mean().item():.3f} std={blink_feat.std().item():.3f}")
+                print(f"  [DIAG] labels: {label.tolist()}")
+                print(f"  [DIAG] effective_batch={args.batch_size}x{args.grad_accum}={args.batch_size * args.grad_accum}")
 
             with torch.cuda.amp.autocast(enabled=(scaler is not None)):
                 outputs = model(frames, rppg_feat, blink_feat)
                 losses = criterion(outputs, label, blink_target=blink_labels)
 
-            loss_tensor = losses["total"]
+            # One-time: print output statistics
+            if epoch == start_epoch and batch_idx == 0:
+                with torch.no_grad():
+                    logit = outputs["logit"]
+                    prob = torch.sigmoid(logit.float())
+                    print(f"  [DIAG] logit: {logit.tolist()} → prob: {prob.tolist()}")
+                    print(f"  [DIAG] losses: " + " | ".join(
+                        f"{k}={v.item():.4f}" if torch.is_tensor(v) else f"{k}={v:.4f}"
+                        for k, v in losses.items()))
+
+            # Scale loss by accumulation steps for correct gradient magnitude
+            loss_tensor = losses["total"] / accum_steps
 
             if scaler:
                 scaler.scale(loss_tensor).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
-                scaler.step(optimizer)
-                scaler.update()
             else:
                 loss_tensor.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
-                optimizer.step()
 
-            scheduler.step()
+            # Step optimizer every accum_steps batches (or at end of epoch)
+            if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(train_dl):
+                if scaler:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+                    scaler.step(optimizer)
+                    scaler.update()
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
+                    optimizer.step()
+                optimizer.zero_grad()
+                scheduler.step()
 
             for k, v in losses.items():
                 if k in epoch_losses:
@@ -234,10 +269,6 @@ def train(args):
                     "step/loss_pulse": losses["pulse"].item() if torch.is_tensor(losses["pulse"]) else losses["pulse"],
                     "step/loss_blink": losses["blink"].item() if torch.is_tensor(losses["blink"]) else losses["blink"],
                 }, step=global_step)
-
-            real_count = (label == 0).sum().item()
-            fake_count = (label == 1).sum().item()
-            print(f"Batch: real={real_count}, fake={fake_count}")
 
         # ─── Collapse detection ──────────────────────────────────────────────
         epoch_preds_arr = np.array(epoch_preds)
@@ -327,6 +358,12 @@ def parse_args():
     # Model
     p.add_argument("--backbone", default="efficientnet_b4")
     p.add_argument("--temporal_model", default="transformer", choices=["transformer", "lstm", "mamba"])
+    p.add_argument("--temporal_pool", default="transformer", choices=["mean", "transformer"],
+                   help="'mean' = skip transformer, just mean-pool frame features. 'transformer' = full temporal encoder.")
+    p.add_argument("--use_physio_fusion", action="store_true", default=True,
+                   help="Fuse rPPG+blink features into classification. Use --no_physio_fusion to disable.")
+    p.add_argument("--no_physio_fusion", dest="use_physio_fusion", action="store_false",
+                   help="Bypass rPPG/blink fusion — classify from temporal features only.")
     p.add_argument("--clip_len", type=int, default=64)
     p.add_argument("--img_size", type=int, default=224)
 
@@ -339,6 +376,8 @@ def parse_args():
     p.add_argument("--weight_decay", type=float, default=1e-4)
     p.add_argument("--warmup_epochs", type=int, default=2)
     p.add_argument("--clip_grad", type=float, default=1.0)
+    p.add_argument("--grad_accum", type=int, default=1,
+                   help="Gradient accumulation steps. Effective batch = batch_size * grad_accum.")
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--fp16", action="store_true", default=True)

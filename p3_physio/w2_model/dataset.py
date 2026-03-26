@@ -332,6 +332,12 @@ class PhysioDeepfakeDataset(Dataset):
                 frames = blink_freeze_augmentation(frames, blink_labels)
                 aug_label = 1.0  # treat as fake
 
+        # ImageNet normalization — CRITICAL for pretrained EfficientNet-B4.
+        # Without this, backbone features are garbage (raw [0,1] pixels ≠ expected distribution).
+        mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        frames = (frames - mean) / std
+
         # Convert frames (T, H, W, 3) → (T, 3, H, W)
         frames_t = torch.from_numpy(frames).permute(0, 3, 1, 2).contiguous()
 

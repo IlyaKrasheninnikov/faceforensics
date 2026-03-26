@@ -71,6 +71,10 @@ class ModelConfig:
     use_pulse_head: bool = True
     use_blink_head: bool = True
 
+    # Ablation flags
+    use_physio_fusion: bool = True     # False = ignore rPPG/blink in fusion (cls from temporal only)
+    temporal_pool: str = "mean"        # "mean" = simple mean pool, "transformer" = full transformer
+
 
 # ─── Backbone ─────────────────────────────────────────────────────────────────
 
@@ -291,8 +295,11 @@ class PhysioNet(nn.Module):
                 cfg.temporal_dim, cfg.temporal_heads, cfg.temporal_layers, cfg.temporal_dropout
             )
 
-        # 3. Fusion: temporal CLS token + explicit features
-        fusion_input_dim = cfg.temporal_dim + cfg.rppg_feature_dim + cfg.blink_feature_dim
+        # 3. Fusion: temporal CLS token + (optionally) explicit features
+        if cfg.use_physio_fusion:
+            fusion_input_dim = cfg.temporal_dim + cfg.rppg_feature_dim + cfg.blink_feature_dim
+        else:
+            fusion_input_dim = cfg.temporal_dim
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_dim, cfg.fusion_dim),
             nn.GELU(),
@@ -336,19 +343,26 @@ class PhysioNet(nn.Module):
 
         # 2. Temporal modeling
         temporal_in = self.temporal_proj(frame_feats)      # (B, T, temporal_dim)
-        temporal_out = self.temporal(temporal_in)          # (B, T, temporal_dim)
 
-        # CLS token = mean pooling over time
-        cls_token = temporal_out.mean(dim=1)               # (B, temporal_dim)
+        if self.cfg.temporal_pool == "mean":
+            # Simple mean pool — no transformer overhead, stable with small batch
+            temporal_out = temporal_in
+            cls_token = temporal_in.mean(dim=1)            # (B, temporal_dim)
+        else:
+            # Full transformer/lstm/mamba temporal encoder
+            temporal_out = self.temporal(temporal_in)       # (B, T, temporal_dim)
+            cls_token = temporal_out.mean(dim=1)           # (B, temporal_dim)
 
-        # 3. Handle explicit features (zero-pad if not provided)
-        if rppg_feat is None:
-            rppg_feat = torch.zeros(B, self.cfg.rppg_feature_dim, device=device)
-        if blink_feat is None:
-            blink_feat = torch.zeros(B, self.cfg.blink_feature_dim, device=device)
+        # 3. Fusion
+        if self.cfg.use_physio_fusion:
+            if rppg_feat is None:
+                rppg_feat = torch.zeros(B, self.cfg.rppg_feature_dim, device=device)
+            if blink_feat is None:
+                blink_feat = torch.zeros(B, self.cfg.blink_feature_dim, device=device)
+            fused = torch.cat([cls_token, rppg_feat, blink_feat], dim=-1)
+        else:
+            fused = cls_token
 
-        # 4. Fusion
-        fused = torch.cat([cls_token, rppg_feat, blink_feat], dim=-1)   # (B, fusion_input_dim)
         fused = self.fusion(fused)                         # (B, fusion_dim)
 
         # 5. Heads
