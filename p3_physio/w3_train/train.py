@@ -182,25 +182,33 @@ def train(args):
     start_epoch = 1
 
     # Resume from latest checkpoint if --resume
+    resume_skip_batches = 0
     if args.resume and (out_dir / "latest.pt").exists():
         resume_ckpt = torch.load(out_dir / "latest.pt", map_location=device, weights_only=False)
         model.load_state_dict(resume_ckpt["model_state_dict"])
         if "optimizer_state_dict" in resume_ckpt:
             optimizer.load_state_dict(resume_ckpt["optimizer_state_dict"])
-        start_epoch = resume_ckpt.get("epoch", 0) + 1
+        start_epoch = resume_ckpt.get("epoch", 0)
+        # If checkpoint was mid-epoch, resume from that epoch and skip batches
+        if "batch_idx" in resume_ckpt:
+            resume_skip_batches = resume_ckpt["batch_idx"] + 1
+            print(f"Resumed from epoch {start_epoch}, batch {resume_skip_batches}")
+        else:
+            start_epoch += 1  # completed full epoch, start next
+            print(f"Resumed from epoch {start_epoch - 1} (completed)")
         best_val_auc = resume_ckpt.get("val_auc", 0.0)
+        global_step = resume_ckpt.get("global_step", len(train_dl) * (start_epoch - 1))
         # Fast-forward scheduler
-        steps_to_skip = len(train_dl) * (start_epoch - 1)
-        for _ in range(steps_to_skip):
+        for _ in range(global_step):
             scheduler.step()
-        global_step = steps_to_skip
-        print(f"Resumed from epoch {start_epoch - 1}, best_val_auc={best_val_auc:.4f}")
+        print(f"  best_val_auc={best_val_auc:.4f}, global_step={global_step}")
 
     # ─── Training Loop ────────────────────────────────────────────────────────
     for epoch in range(start_epoch, args.epochs + 1):
 
         model.train()
-        epoch_losses = {k: [] for k in ["total", "cls", "pulse", "blink", "contrastive"]}
+        epoch_loss_sums = {k: 0.0 for k in ["total", "cls", "pulse", "blink", "contrastive"]}
+        epoch_loss_count = 0
         # Track predictions for collapse detection (running stats, not full list)
         pred_sum = 0.0
         pred_sq_sum = 0.0
@@ -211,11 +219,16 @@ def train(args):
         optimizer.zero_grad()
 
         for batch_idx, batch in enumerate(tqdm(train_dl, desc=f"Epoch {epoch}/{args.epochs}", leave=False)):
-            frames = batch["frames"].to(device)
-            rppg_feat = batch["rppg_feat"].to(device)
-            blink_feat = batch["blink_feat"].to(device)
-            blink_labels = batch["blink_labels"].to(device)
-            label = batch["label"].to(device)
+            # Skip batches already processed (for mid-epoch resume)
+            if resume_skip_batches > 0:
+                resume_skip_batches -= 1
+                continue
+
+            frames = batch["frames"].to(device, non_blocking=True)
+            rppg_feat = batch["rppg_feat"].to(device, non_blocking=True)
+            blink_feat = batch["blink_feat"].to(device, non_blocking=True)
+            blink_labels = batch["blink_labels"].to(device, non_blocking=True)
+            label = batch["label"].to(device, non_blocking=True)
 
             # One-time diagnostic: print input statistics on first batch of first epoch
             if epoch == start_epoch and batch_idx == 0:
@@ -266,8 +279,11 @@ def train(args):
                 scheduler.step()
 
             for k, v in losses.items():
-                if k in epoch_losses:
-                    epoch_losses[k].append(v.item() if torch.is_tensor(v) else float(v))
+                if k in epoch_loss_sums:
+                    epoch_loss_sums[k] += v.item() if torch.is_tensor(v) else float(v)
+            epoch_loss_count += 1
+            # Keep last loss values for step logging
+            last_losses = {k: (v.item() if torch.is_tensor(v) else float(v)) for k, v in losses.items() if k in epoch_loss_sums}
 
             # Collect running stats for collapse detection (no list — saves RAM)
             with torch.no_grad():
@@ -284,18 +300,26 @@ def train(args):
             global_step += 1
             if global_step % args.log_interval == 0:
                 logger.log({
-                    "step/loss_total": epoch_losses["total"][-1],
-                    "step/loss_cls": epoch_losses["cls"][-1],
-                    "step/loss_pulse": epoch_losses["pulse"][-1],
-                    "step/loss_blink": epoch_losses["blink"][-1],
+                    "step/loss_total": last_losses.get("total", 0),
+                    "step/loss_cls": last_losses.get("cls", 0),
+                    "step/loss_pulse": last_losses.get("pulse", 0),
+                    "step/loss_blink": last_losses.get("blink", 0),
                 }, step=global_step)
 
             # Periodic CUDA cache clearing to prevent OOM from fragmentation
-            if device.type == "cuda" and (batch_idx + 1) % 100 == 0:
+            if device.type == "cuda" and (batch_idx + 1) % 50 == 0:
                 torch.cuda.empty_cache()
+                import gc; gc.collect()
 
-            # Mid-epoch checkpoint every 200 batches (saves ~25 min of work)
-            if (batch_idx + 1) % 200 == 0:
+            # Memory monitoring: print GPU usage every 100 batches
+            if device.type == "cuda" and (batch_idx + 1) % 100 == 0:
+                allocated = torch.cuda.memory_allocated() / 1024**3
+                reserved = torch.cuda.memory_reserved() / 1024**3
+                max_alloc = torch.cuda.max_memory_allocated() / 1024**3
+                print(f"  [MEM] batch {batch_idx+1}: alloc={allocated:.2f}GB reserved={reserved:.2f}GB peak={max_alloc:.2f}GB")
+
+            # Mid-epoch checkpoint every 100 batches (saves progress before Kaggle kills)
+            if (batch_idx + 1) % 100 == 0:
                 state_dict_mid = model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict()
                 torch.save({
                     "epoch": epoch,
@@ -321,9 +345,10 @@ def train(args):
         # ─── Validation ───────────────────────────────────────────────────────
         val_metrics = evaluate(model, val_dl, device, scaler, split="val")
 
+        epoch_loss_avgs = {k: v / max(epoch_loss_count, 1) for k, v in epoch_loss_sums.items()}
         metrics = {
             "epoch": epoch,
-            **{f"train/{k}": np.mean(v) for k, v in epoch_losses.items() if v},
+            **{f"train/{k}": v for k, v in epoch_loss_avgs.items()},
             **{f"val/{k}": v for k, v in val_metrics.items()},
             "lr": scheduler.get_last_lr()[0],
             "train/pred_mean": float(pred_mean),
@@ -415,7 +440,7 @@ def parse_args():
     p.add_argument("--clip_grad", type=float, default=1.0)
     p.add_argument("--grad_accum", type=int, default=1,
                    help="Gradient accumulation steps. Effective batch = batch_size * grad_accum.")
-    p.add_argument("--num_workers", type=int, default=4)
+    p.add_argument("--num_workers", type=int, default=2)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--fp16", action="store_true", default=True)
     p.add_argument("--log_interval", type=int, default=20)

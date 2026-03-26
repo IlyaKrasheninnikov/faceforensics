@@ -515,9 +515,11 @@ def build_dataloaders(
     sampler = WeightedRandomSampler(weights, len(weights), replacement=True)
 
     # drop_last=True avoids partial batches (important with small batch sizes)
-    train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, num_workers=num_workers, pin_memory=True, drop_last=True)
-    val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
-    test_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    # prefetch_factor=2 limits memory buffering; persistent_workers=False forces cleanup
+    dl_kwargs = dict(num_workers=num_workers, pin_memory=True, prefetch_factor=2 if num_workers > 0 else None)
+    train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, drop_last=True, **dl_kwargs)
+    val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **dl_kwargs)
+    test_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=False, **dl_kwargs)
 
     # Expose class ratio so train.py can auto-compute pos_weight
     n_real_int, n_fake_int = int(n_real), int(n_fake)
