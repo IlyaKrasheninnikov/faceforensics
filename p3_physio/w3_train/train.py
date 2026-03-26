@@ -201,8 +201,11 @@ def train(args):
 
         model.train()
         epoch_losses = {k: [] for k in ["total", "cls", "pulse", "blink", "contrastive"]}
-        # Track predictions for collapse detection
-        epoch_preds = []
+        # Track predictions for collapse detection (running stats, not full list)
+        pred_sum = 0.0
+        pred_sq_sum = 0.0
+        pred_count = 0
+        pred_above_05 = 0
 
         accum_steps = args.grad_accum
         optimizer.zero_grad()
@@ -266,25 +269,49 @@ def train(args):
                 if k in epoch_losses:
                     epoch_losses[k].append(v.item() if torch.is_tensor(v) else float(v))
 
-            # Collect predictions for collapse detection
+            # Collect running stats for collapse detection (no list — saves RAM)
             with torch.no_grad():
-                probs = torch.sigmoid(outputs["logit"].float()).cpu().numpy()
-                epoch_preds.extend(probs.tolist())
+                probs = torch.sigmoid(outputs["logit"].float()).cpu()
+                pred_sum += probs.sum().item()
+                pred_sq_sum += (probs ** 2).sum().item()
+                pred_count += probs.numel()
+                pred_above_05 += (probs > 0.5).sum().item()
+                del probs
+
+            # Explicitly free GPU tensors to prevent memory buildup
+            del frames, rppg_feat, blink_feat, blink_labels, label, outputs, losses, loss_tensor
 
             global_step += 1
             if global_step % args.log_interval == 0:
                 logger.log({
-                    "step/loss_total": losses["total"].item() if torch.is_tensor(losses["total"]) else losses["total"],
-                    "step/loss_cls": losses["cls"].item() if torch.is_tensor(losses["cls"]) else losses["cls"],
-                    "step/loss_pulse": losses["pulse"].item() if torch.is_tensor(losses["pulse"]) else losses["pulse"],
-                    "step/loss_blink": losses["blink"].item() if torch.is_tensor(losses["blink"]) else losses["blink"],
+                    "step/loss_total": epoch_losses["total"][-1],
+                    "step/loss_cls": epoch_losses["cls"][-1],
+                    "step/loss_pulse": epoch_losses["pulse"][-1],
+                    "step/loss_blink": epoch_losses["blink"][-1],
                 }, step=global_step)
 
+            # Periodic CUDA cache clearing to prevent OOM from fragmentation
+            if device.type == "cuda" and (batch_idx + 1) % 100 == 0:
+                torch.cuda.empty_cache()
+
+            # Mid-epoch checkpoint every 200 batches (saves ~25 min of work)
+            if (batch_idx + 1) % 200 == 0:
+                state_dict_mid = model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict()
+                torch.save({
+                    "epoch": epoch,
+                    "batch_idx": batch_idx,
+                    "model_state_dict": state_dict_mid,
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "val_auc": best_val_auc,
+                    "global_step": global_step,
+                }, out_dir / "latest.pt")
+                del state_dict_mid
+                print(f"  [Checkpoint] Saved mid-epoch at batch {batch_idx + 1}/{len(train_dl)}")
+
         # ─── Collapse detection ──────────────────────────────────────────────
-        epoch_preds_arr = np.array(epoch_preds)
-        pred_mean = epoch_preds_arr.mean()
-        pred_std = epoch_preds_arr.std()
-        frac_above_05 = (epoch_preds_arr > 0.5).mean()
+        pred_mean = pred_sum / max(pred_count, 1)
+        pred_std = max(0, pred_sq_sum / max(pred_count, 1) - pred_mean ** 2) ** 0.5
+        frac_above_05 = pred_above_05 / max(pred_count, 1)
         print(f"  [Collapse check] pred_mean={pred_mean:.3f} pred_std={pred_std:.3f} "
               f"frac_fake={frac_above_05:.3f}")
         if pred_std < 0.05:
