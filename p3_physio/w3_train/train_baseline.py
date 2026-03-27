@@ -120,12 +120,19 @@ class PNGFrameDataset(Dataset):
     """
     Each sample = 1 random frame from a video folder.
     Loads PNG directly — no video decoding overhead.
+
+    frames_per_video > 1: expands dataset by treating each video as N samples,
+    each picking a different random frame. Increases effective epoch size.
     """
 
-    def __init__(self, video_dirs: List[str], labels: List[int], img_size: int = 224):
+    def __init__(self, video_dirs: List[str], labels: List[int],
+                 img_size: int = 224, augment: bool = False,
+                 frames_per_video: int = 1):
         self.video_dirs = video_dirs
         self.labels = labels
         self.img_size = img_size
+        self.augment = augment
+        self.frames_per_video = frames_per_video
         # ImageNet normalization
         self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
         self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -140,12 +147,13 @@ class PNGFrameDataset(Dataset):
             self.frame_lists.append(frames)
 
     def __len__(self):
-        return len(self.video_dirs)
+        return len(self.video_dirs) * self.frames_per_video
 
     def __getitem__(self, idx):
-        vdir = self.video_dirs[idx]
-        label = self.labels[idx]
-        frames = self.frame_lists[idx]
+        video_idx = idx % len(self.video_dirs)
+        vdir = self.video_dirs[video_idx]
+        label = self.labels[video_idx]
+        frames = self.frame_lists[video_idx]
 
         if not frames:
             img = np.zeros((self.img_size, self.img_size, 3), dtype=np.float32)
@@ -164,6 +172,23 @@ class PNGFrameDataset(Dataset):
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
                 img = cv2.resize(img, (self.img_size, self.img_size))
                 img = img.astype(np.float32) / 255.0
+
+        # Training augmentations
+        if self.augment:
+            # Random horizontal flip
+            if random.random() > 0.5:
+                img = img[:, ::-1, :].copy()
+            # Random brightness/contrast jitter
+            if random.random() > 0.5:
+                brightness = random.uniform(0.85, 1.15)
+                img = np.clip(img * brightness, 0, 1)
+            # Random JPEG compression artifact (simulates different quality)
+            if random.random() > 0.7:
+                quality = random.randint(30, 95)
+                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+                _, buf = cv2.imencode('.jpg', (img * 255).astype(np.uint8)[..., ::-1], encode_param)
+                img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
 
         # ImageNet normalize
         img = (img - self.mean) / self.std
@@ -275,15 +300,18 @@ def train(args):
     print(f"Identity-aware split: {n_train_ids}/{n_val_ids}/{n_ids - n_train_ids - n_val_ids} "
           f"source IDs (no identity overlap)")
 
-    train_ds = PNGFrameDataset(train_dirs, train_labels, args.img_size)
+    train_ds = PNGFrameDataset(train_dirs, train_labels, args.img_size,
+                               augment=True, frames_per_video=args.frames_per_video)
     val_ds = PNGFrameDataset(val_dirs, val_labels, args.img_size)
     test_ds = PNGFrameDataset(test_dirs, test_labels, args.img_size)
 
-    # Balanced sampler
+    # Balanced sampler (expanded for frames_per_video)
     train_labels_arr = np.array(train_labels)
     n_real_train = int((train_labels_arr == 0).sum())
     n_fake_train = int((train_labels_arr == 1).sum())
-    weights = np.where(train_labels_arr == 0, 1.0 / (n_real_train + 1), 1.0 / (n_fake_train + 1))
+    weights_per_video = np.where(train_labels_arr == 0, 1.0 / (n_real_train + 1), 1.0 / (n_fake_train + 1))
+    # Tile weights for expanded dataset
+    weights = np.tile(weights_per_video, args.frames_per_video)
     sampler = WeightedRandomSampler(weights, len(weights), replacement=True)
 
     train_dl = DataLoader(train_ds, batch_size=args.batch_size, sampler=sampler,
@@ -479,9 +507,11 @@ def parse_args():
 
     p.add_argument("--backbone", default="efficientnet_b4")
     p.add_argument("--img_size", type=int, default=224)
-    p.add_argument("--epochs", type=int, default=10)
+    p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--frames_per_video", type=int, default=5,
+                   help="Number of random frames per video per epoch (expands dataset)")
     p.add_argument("--num_workers", type=int, default=2)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--fp16", action="store_true", default=True)
