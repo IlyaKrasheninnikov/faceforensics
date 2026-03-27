@@ -230,12 +230,17 @@ def train(args):
         accum_steps = args.grad_accum
         optimizer.zero_grad()
 
-        for batch_idx, batch in enumerate(tqdm(train_dl, desc=f"Epoch {epoch}/{args.epochs}", leave=False)):
-            frames = batch["frames"].to(device)
-            rppg_feat = batch["rppg_feat"].to(device)
-            blink_feat = batch["blink_feat"].to(device)
-            blink_labels = batch["blink_labels"].to(device)
-            label = batch["label"].to(device)
+        pbar = tqdm(train_dl, desc=f"Epoch {epoch}/{args.epochs}", leave=False)
+        for batch_idx, batch in enumerate(pbar):
+            try:
+                frames = batch["frames"].to(device)
+                rppg_feat = batch["rppg_feat"].to(device)
+                blink_feat = batch["blink_feat"].to(device)
+                blink_labels = batch["blink_labels"].to(device)
+                label = batch["label"].to(device)
+            except Exception as e:
+                print(f"\n  [WARN] Batch {batch_idx} load error: {e} — skipping")
+                continue
 
             # One-time diagnostic: print input statistics on first batch of first epoch
             if epoch == start_epoch and batch_idx == 0:
@@ -284,6 +289,9 @@ def train(args):
                     optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()
+                # Free accumulated computation graph memory
+                if device.type == "cuda":
+                    torch.cuda.empty_cache()
 
             for k, v in losses.items():
                 if k in epoch_losses:
@@ -295,6 +303,12 @@ def train(args):
                 epoch_preds.extend(probs.tolist())
 
             global_step += 1
+            # Periodic VRAM check (every 100 steps)
+            if device.type == "cuda" and global_step % 100 == 0:
+                alloc = torch.cuda.memory_allocated() / 1e9
+                reserved = torch.cuda.memory_reserved() / 1e9
+                pbar.set_postfix_str(f"VRAM={alloc:.1f}/{reserved:.1f}GB")
+
             if global_step % args.log_interval == 0:
                 logger.log({
                     "step/loss_total": losses["total"].item() if torch.is_tensor(losses["total"]) else losses["total"],

@@ -304,6 +304,27 @@ class PhysioDeepfakeDataset(Dataset):
         return feat, labels
 
     def __getitem__(self, idx: int) -> Dict:
+        try:
+            return self._getitem_inner(idx)
+        except Exception as e:
+            # On ANY error, return a safe zero sample instead of crashing the worker.
+            # This prevents DataLoader hangs on corrupt videos or transient I/O errors.
+            print(f"  [WARN] Error loading idx={idx} ({self.video_paths[idx]}): {e}")
+            frames = np.zeros((self.clip_len, self.img_size, self.img_size, 3), dtype=np.float32)
+            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+            std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+            frames = (frames - mean) / std
+            frames_t = torch.from_numpy(frames).permute(0, 3, 1, 2).contiguous()
+            return {
+                "frames": frames_t,
+                "rppg_feat": torch.zeros(self.rppg_feat_dim, dtype=torch.float32),
+                "blink_feat": torch.zeros(self.blink_feat_dim, dtype=torch.float32),
+                "blink_labels": torch.zeros(self.clip_len, dtype=torch.float32),
+                "label": torch.tensor(float(self.labels[idx]), dtype=torch.float32),
+                "video_path": self.video_paths[idx],
+            }
+
+    def _getitem_inner(self, idx: int) -> Dict:
         video_path = self.video_paths[idx]
         label = self.labels[idx]
 
@@ -519,9 +540,14 @@ def build_dataloaders(
     sampler = WeightedRandomSampler(weights, len(weights), replacement=True)
 
     # drop_last=True avoids partial batches (important with small batch sizes)
-    train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, num_workers=num_workers, pin_memory=True, drop_last=True)
-    val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
-    test_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    # timeout=120 kills hung workers after 2 min (prevents silent DataLoader hangs)
+    # persistent_workers keeps workers alive between epochs (avoids re-spawn overhead)
+    dl_kwargs = dict(pin_memory=True, timeout=120)
+    if num_workers > 0:
+        dl_kwargs["persistent_workers"] = True
+    train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, num_workers=num_workers, drop_last=True, **dl_kwargs)
+    val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, **dl_kwargs)
+    test_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, **dl_kwargs)
 
     # Expose class ratio so train.py can auto-compute pos_weight
     n_real_int, n_fake_int = int(n_real), int(n_fake)
