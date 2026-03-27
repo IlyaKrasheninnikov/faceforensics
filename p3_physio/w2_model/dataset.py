@@ -328,8 +328,12 @@ class PhysioDeepfakeDataset(Dataset):
                 blink_labels = np.pad(blink_labels, (0, self.clip_len - len(blink_labels)))
 
         # Augmentations (only for real samples → relabel as fake)
+        # When skip_physio=True (cls-only mode), disable pulse_strip and blink_freeze
+        # because: (1) pulse_strip is very slow (per-frame LAB conversion), (2) both
+        # augmentations flip real→fake labels which with batch_size=2 can make entire
+        # batches all-fake, teaching the model to predict everything as fake.
         aug_label = float(label)
-        if self.augment and label == 0:  # real video
+        if self.augment and label == 0 and not self.skip_physio:  # real video, physio mode
             if random.random() < self.pulse_strip_prob:
                 frames = pulse_strip_augmentation(frames, self.fps)
                 aug_label = 1.0  # treat as fake for training
@@ -515,11 +519,9 @@ def build_dataloaders(
     sampler = WeightedRandomSampler(weights, len(weights), replacement=True)
 
     # drop_last=True avoids partial batches (important with small batch sizes)
-    # prefetch_factor=2 limits memory buffering; persistent_workers=False forces cleanup
-    dl_kwargs = dict(num_workers=num_workers, pin_memory=True, prefetch_factor=2 if num_workers > 0 else None)
-    train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, drop_last=True, **dl_kwargs)
-    val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False, **dl_kwargs)
-    test_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=False, **dl_kwargs)
+    train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, num_workers=num_workers, pin_memory=True, drop_last=True)
+    val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    test_dl = DataLoader(test_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
 
     # Expose class ratio so train.py can auto-compute pos_weight
     n_real_int, n_fake_int = int(n_real), int(n_fake)

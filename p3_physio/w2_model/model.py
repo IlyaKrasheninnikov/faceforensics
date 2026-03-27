@@ -102,13 +102,14 @@ class FrameEncoder(nn.Module):
             )
             self.out_dim = 64
 
-    def forward(self, x: torch.Tensor, chunk_size: int = 8) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, chunk_size: int = 4) -> torch.Tensor:
         """
         x: (B, T, C, H, W)
         returns: (B, T, D)
 
         Processes frames in chunks to avoid OOM on long clips.
         Uses gradient checkpointing to save memory when training.
+        chunk_size=4 is safe for T4 16GB with EfficientNet-B4.
         """
         B, T, C, H, W = x.shape
         x = x.view(B * T, C, H, W)
