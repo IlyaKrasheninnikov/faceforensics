@@ -532,12 +532,17 @@ def build_dataloaders(
     val_ds = PhysioDeepfakeDataset(val_paths, val_labels, clip_len, img_size, augment=False, cache_dir=cache_dir, fallback_cache_dirs=fb, skip_physio=skip_physio)
     test_ds = PhysioDeepfakeDataset(test_paths, test_labels, clip_len, img_size, augment=False, cache_dir=cache_dir, fallback_cache_dirs=fb, skip_physio=skip_physio)
 
-    # Balanced sampler for training
+    # Balanced sampler for training.
+    # Cap samples per epoch so training fits within Kaggle's 12h session limit.
+    # With batch_size=2, num_workers=2: ~6s/step → 500 steps ≈ 50 min/epoch.
+    # 5 epochs × 50 min + val/test ≈ 5-6 hours total (safe margin).
     train_labels_arr = np.array(train_labels)
     n_real = (train_labels_arr == 0).sum()
     n_fake = (train_labels_arr == 1).sum()
     weights = np.where(train_labels_arr == 0, 1.0 / (n_real + 1), 1.0 / (n_fake + 1))
-    sampler = WeightedRandomSampler(weights, len(weights), replacement=True)
+    max_samples = min(len(weights), 1000)  # 1000 samples → 500 steps with bs=2
+    sampler = WeightedRandomSampler(weights, max_samples, replacement=True)
+    print(f"Sampler: {max_samples} samples/epoch (capped from {len(weights)}, with replacement)")
 
     # drop_last=True avoids partial batches (important with small batch sizes)
     # timeout + persistent_workers only valid with num_workers > 0
