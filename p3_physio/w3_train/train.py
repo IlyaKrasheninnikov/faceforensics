@@ -1,28 +1,21 @@
 """
-W3: Main PhysioNet detection training script (Phase 2 — real + fake).
+W3: PhysioNet training script — robust version for Kaggle T4.
 
-Loads pretrain checkpoint (from w2), fine-tunes with full multi-task loss
-on real + fake data.
+Single-GPU only (no DataParallel — it causes hangs with small batch sizes).
+Designed to complete 5 epochs within Kaggle's 12h limit.
 
 Usage:
     python w3_train/train.py \
         --ff_root /data/FF++ \
-        --celebdf_root /data/CelebDF-v2 \
-        --pretrain_ckpt ./checkpoints/pretrain_best.pt \
-        --run_name w3_initial_train \
-        --epochs 30 \
-        --batch_size 8 \
-        --fp16
-
-    # Without pretrain checkpoint (train from scratch):
-    python w3_train/train.py \
-        --ff_root /data/FF++ \
-        --run_name w3_scratch
+        --run_name w3_baseline \
+        --epochs 5 --batch_size 4 --clip_len 16
 """
 
 import argparse
 import math
+import os
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -38,24 +31,20 @@ from w2_model.dataset import build_dataloaders
 from w3_train.eval import evaluate
 
 
-def warmup_cache(dataset, num_workers: int = 2):
-    """Pre-extract and cache all rPPG/blink features before training starts."""
-    from torch.utils.data import DataLoader
-    print(f"\n── Pre-caching physiological features for {len(dataset)} videos ──")
-    print("   (MediaPipe runs once here; subsequent epochs load from disk cache)")
-    loader = DataLoader(dataset, batch_size=1, shuffle=False,
-                        num_workers=num_workers, pin_memory=False)
-    for i, _ in enumerate(tqdm(loader, desc="Caching features", leave=False)):
-        pass
-    print(f"   ✓ Cached {i+1} videos\n")
-
-
 def train(args):
-    # ─── Setup ────────────────────────────────────────────────────────────────
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Force single GPU — DataParallel with batch_size<=4 causes hangs
+    if torch.cuda.is_available():
+        device = torch.device("cuda:0")
+        torch.cuda.set_device(0)
+    else:
+        device = torch.device("cpu")
     print(f"Device: {device}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}, "
+              f"VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
 
     logger = ExperimentLogger(
         project="p3_physio_deepfake",
@@ -66,19 +55,14 @@ def train(args):
 
     # ─── Data ─────────────────────────────────────────────────────────────────
     fallback = [d for d in (args.fallback_cache_dir or []) if Path(d).exists()]
-    # Skip physio extraction when features aren't used — saves heavy CPU work
-    print(not args.use_physio_fusion, args.w_pulse == 0, args.w_blink == 0)
-    skip_physio = not args.use_physio_fusion and args.w_pulse == 0 and args.w_blink == 0
-    # Also skip physio when pulse/blink losses are zero (no point extracting features we won't use)
-    if args.w_pulse == 0 and args.w_blink == 0:
-        skip_physio = True
-        # Force physio fusion off when features are zeros — feeding 144 dims of zeros
-        # into the fusion MLP distorts the classification signal.
-        if args.use_physio_fusion:
-            print("Auto-disabling physio fusion (w_pulse=0, w_blink=0 → features are zeros)")
-            args.use_physio_fusion = False
+
+    # Auto-disable physio when not needed
+    skip_physio = (args.w_pulse == 0 and args.w_blink == 0)
+    if skip_physio and args.use_physio_fusion:
+        print("Auto-disabling physio fusion (pulse/blink weights are 0)")
+        args.use_physio_fusion = False
     if skip_physio:
-        print("Skipping physio feature extraction (not used in this config)")
+        print("Skipping physio extraction (not used)")
 
     train_dl, val_dl, test_dl = build_dataloaders(
         ff_root=args.ff_root,
@@ -92,18 +76,12 @@ def train(args):
         seed=args.seed,
         augment_train=True,
         skip_physio=skip_physio,
+        max_train_samples=args.max_train_samples,
     )
 
-    # Log augmentation status
-    train_ds = train_dl.dataset
-    print(f"Train augmentations: pulse_strip={train_ds.pulse_strip_prob if not train_ds.skip_physio else 'OFF'}, "
-          f"blink_freeze={train_ds.blink_freeze_prob if not train_ds.skip_physio else 'OFF'}")
-
-    # Pre-cache all features (rPPG + blink via MediaPipe) before GPU training
-    if not args.skip_cache:
-        warmup_cache(train_dl.dataset, num_workers=args.num_workers)
-    else:
-        print("Skipping feature cache warmup (--skip_cache)")
+    steps_per_epoch = len(train_dl)
+    est_time = steps_per_epoch * 3.0 * args.epochs / 3600  # ~3s/step estimate
+    print(f"Estimated training time: {est_time:.1f}h ({steps_per_epoch} steps/epoch × {args.epochs} epochs)")
 
     # ─── Model ────────────────────────────────────────────────────────────────
     cfg = ModelConfig(
@@ -119,166 +97,125 @@ def train(args):
     )
     print(f"Config: physio_fusion={cfg.use_physio_fusion}, temporal_pool={cfg.temporal_pool}, "
           f"pulse_head={cfg.use_pulse_head}, blink_head={cfg.use_blink_head}")
-    model = PhysioNet(cfg).to(device)
-    if torch.cuda.device_count() > 1:
-        print(f"Using {torch.cuda.device_count()} GPUs")
-        model = torch.nn.DataParallel(model)
 
+    model = PhysioNet(cfg).to(device)
+
+    # Load pretrain checkpoint if available
     if args.pretrain_ckpt and Path(args.pretrain_ckpt).exists():
         ckpt = torch.load(args.pretrain_ckpt, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["model_state_dict"], strict=False)
-        print(f"Loaded pretrain checkpoint: {args.pretrain_ckpt}")
+        print(f"Loaded pretrain: {args.pretrain_ckpt}")
     else:
-        print("Training from scratch (no pretrain checkpoint)")
+        print("Training from scratch")
 
-    # FIX: Train end-to-end from the start — do NOT freeze backbone.
-    # Previous approach froze backbone for 2 epochs, but with random/pretrain features
-    # the heads learned the trivial "always predict fake" solution and never recovered.
-    base_model = model.module if isinstance(model, torch.nn.DataParallel) else model
-    base_model.freeze_backbone(freeze=False)
-    print("Training end-to-end (backbone NOT frozen)")
-
-    params = base_model.get_num_params()
-    print(f"Model: {params['total']/1e6:.1f}M total, {params['trainable']/1e6:.1f}M trainable")
-
-    # ─── Verify learning rates ───────────────────────────────────────────────
-    print(f"Learning rates: backbone={args.lr_backbone}, head={args.lr_head}, temporal={args.lr_temporal}")
-    print(f"Loss weights: cls={args.w_class}, pulse={args.w_pulse}, blink={args.w_blink}, contrastive={args.w_contrastive}")
-    if args.lr_head == 0:
-        print("[FATAL] lr_head is 0 — model will not learn. Check your command-line args!")
-        print("  Hint: use dots not commas for decimals (0.4 not 0,4)")
-        raise ValueError("lr_head cannot be 0")
-
-    # ─── Loss ─────────────────────────────────────────────────────────────────
-    # WeightedRandomSampler already balances batches to ~50/50 real/fake.
-    # No additional pos_weight needed — it was previously causing collapse by
-    # applying 5.94x weight to fakes (majority class), training model to predict all-fake.
-    print(f"pos_weight={args.pos_weight} (1.0 = no reweighting, sampler handles balance)")
-
-    criterion = PhysioMultiTaskLoss(
-        w_class=args.w_class,
-        w_pulse=args.w_pulse,
-        w_blink=args.w_blink,
-        w_contrastive=args.w_contrastive,
-        pos_weight=args.pos_weight,
-    )
+    # Unfreeze everything
+    model.freeze_backbone(freeze=False)
+    params = model.get_num_params()
+    print(f"Model: {params['total']/1e6:.1f}M params, {params['trainable']/1e6:.1f}M trainable")
 
     # ─── Optimizer ────────────────────────────────────────────────────────────
-    if isinstance(model, torch.nn.DataParallel):
-        base_model = model.module
-    else:
-        base_model = model
+    print(f"LR: backbone={args.lr_backbone}, head={args.lr_head}, temporal={args.lr_temporal}")
+    print(f"Loss weights: cls={args.w_class}, pulse={args.w_pulse}, blink={args.w_blink}, contrastive={args.w_contrastive}")
 
     param_groups = [
-        {"params": base_model.frame_encoder.parameters(), "lr": args.lr_backbone},
-        {"params": base_model.temporal_proj.parameters(), "lr": args.lr_head},
-        {"params": base_model.temporal.parameters(), "lr": args.lr_temporal},
-        {"params": base_model.cls_head.parameters(), "lr": args.lr_head},
-        {"params": base_model.fusion.parameters(), "lr": args.lr_head},
+        {"params": model.frame_encoder.parameters(), "lr": args.lr_backbone},
+        {"params": model.temporal_proj.parameters(), "lr": args.lr_head},
+        {"params": model.temporal.parameters(), "lr": args.lr_temporal},
+        {"params": model.cls_head.parameters(), "lr": args.lr_head},
+        {"params": model.fusion.parameters(), "lr": args.lr_head},
     ]
-    if hasattr(base_model, "pulse_head"):
-        param_groups.append({"params": base_model.pulse_head.parameters(), "lr": args.lr_head})
-    if hasattr(base_model, "blink_head"):
-        param_groups.append({"params": base_model.blink_head.parameters(), "lr": args.lr_head})
+    if hasattr(model, "pulse_head"):
+        param_groups.append({"params": model.pulse_head.parameters(), "lr": args.lr_head})
+    if hasattr(model, "blink_head"):
+        param_groups.append({"params": model.blink_head.parameters(), "lr": args.lr_head})
     optimizer = torch.optim.AdamW(param_groups, weight_decay=args.weight_decay)
 
-    total_steps = len(train_dl) * args.epochs
-    warmup_steps = min(len(train_dl) * args.warmup_epochs, total_steps // 2)
-    # Cosine schedule with linear warmup: ramp up LR over warmup_steps, then decay.
-    # This prevents the head from overshooting early (causing collapse) and allows
-    # backbone fine-tuning to converge smoothly.
+    # Cosine schedule with warmup
+    total_steps = steps_per_epoch * args.epochs
+    warmup_steps = min(steps_per_epoch, total_steps // 4)
+
     def lr_lambda(step):
         if step < warmup_steps:
-            return float(step) / max(1, warmup_steps)  # linear warmup
-        # cosine decay after warmup
+            return max(0.1, float(step) / max(1, warmup_steps))
         progress = float(step - warmup_steps) / max(1, total_steps - warmup_steps)
         return max(0.01, 0.5 * (1.0 + math.cos(math.pi * progress)))
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
 
+    criterion = PhysioMultiTaskLoss(
+        w_class=args.w_class, w_pulse=args.w_pulse,
+        w_blink=args.w_blink, w_contrastive=args.w_contrastive,
+        pos_weight=args.pos_weight,
+    )
 
-    scaler = torch.cuda.amp.GradScaler() if args.fp16 and device.type == "cuda" else None
+    scaler = torch.amp.GradScaler("cuda") if args.fp16 and device.type == "cuda" else None
+
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     best_val_auc = 0.0
     global_step = 0
     start_epoch = 1
 
-    # Resume from latest checkpoint if --resume
+    # Resume
     if args.resume and (out_dir / "latest.pt").exists():
-        resume_ckpt = torch.load(out_dir / "latest.pt", map_location=device, weights_only=False)
-        model.load_state_dict(resume_ckpt["model_state_dict"])
-        if "optimizer_state_dict" in resume_ckpt:
-            optimizer.load_state_dict(resume_ckpt["optimizer_state_dict"])
-        start_epoch = resume_ckpt.get("epoch", 0) + 1
-        best_val_auc = resume_ckpt.get("val_auc", 0.0)
-        # Fast-forward scheduler
-        steps_to_skip = len(train_dl) * (start_epoch - 1)
-        for _ in range(steps_to_skip):
+        ckpt = torch.load(out_dir / "latest.pt", map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model_state_dict"])
+        if "optimizer_state_dict" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        start_epoch = ckpt.get("epoch", 0) + 1
+        best_val_auc = ckpt.get("val_auc", 0.0)
+        global_step = steps_per_epoch * (start_epoch - 1)
+        for _ in range(global_step):
             scheduler.step()
-        global_step = steps_to_skip
         print(f"Resumed from epoch {start_epoch - 1}, best_val_auc={best_val_auc:.4f}")
 
-    # ─── Training Loop ────────────────────────────────────────────────────────
+    # ─── Training ─────────────────────────────────────────────────────────────
+    accum_steps = args.grad_accum
+    train_start = time.time()
+
     for epoch in range(start_epoch, args.epochs + 1):
-
         model.train()
-        epoch_losses = {k: [] for k in ["total", "cls", "pulse", "blink", "contrastive"]}
-        # Track predictions for collapse detection
+        epoch_loss = []
         epoch_preds = []
-
-        accum_steps = args.grad_accum
         optimizer.zero_grad()
+        epoch_start = time.time()
 
         pbar = tqdm(train_dl, desc=f"Epoch {epoch}/{args.epochs}", leave=False)
         for batch_idx, batch in enumerate(pbar):
-            try:
-                frames = batch["frames"].to(device)
-                rppg_feat = batch["rppg_feat"].to(device)
-                blink_feat = batch["blink_feat"].to(device)
-                blink_labels = batch["blink_labels"].to(device)
-                label = batch["label"].to(device)
-            except Exception as e:
-                print(f"\n  [WARN] Batch {batch_idx} load error: {e} — skipping")
-                continue
+            frames = batch["frames"].to(device, non_blocking=True)
+            rppg_feat = batch["rppg_feat"].to(device, non_blocking=True)
+            blink_feat = batch["blink_feat"].to(device, non_blocking=True)
+            blink_labels = batch["blink_labels"].to(device, non_blocking=True)
+            label = batch["label"].to(device, non_blocking=True)
 
-            # One-time diagnostic: print input statistics on first batch of first epoch
+            # Diagnostics on first batch
             if epoch == start_epoch and batch_idx == 0:
-                print(f"\n  [DIAG] frames: shape={list(frames.shape)} "
-                      f"mean={frames.mean().item():.3f} std={frames.std().item():.3f} "
-                      f"min={frames.min().item():.3f} max={frames.max().item():.3f}")
-                print(f"  [DIAG] rppg_feat: shape={list(rppg_feat.shape)} "
-                      f"mean={rppg_feat.mean().item():.3f} std={rppg_feat.std().item():.3f} "
-                      f"norm={rppg_feat.norm(dim=-1).mean().item():.3f}")
-                print(f"  [DIAG] blink_feat: shape={list(blink_feat.shape)} "
-                      f"mean={blink_feat.mean().item():.3f} std={blink_feat.std().item():.3f}")
+                print(f"\n  [DIAG] frames: {list(frames.shape)} "
+                      f"mean={frames.mean().item():.3f} std={frames.std().item():.3f}")
                 print(f"  [DIAG] labels: {label.tolist()}")
-                print(f"  [DIAG] effective_batch={args.batch_size}x{args.grad_accum}={args.batch_size * args.grad_accum}")
+                if device.type == "cuda":
+                    print(f"  [DIAG] VRAM after load: {torch.cuda.memory_allocated()/1e9:.2f} GB")
 
-            with torch.cuda.amp.autocast(enabled=(scaler is not None)):
+            with torch.amp.autocast("cuda", enabled=(scaler is not None)):
                 outputs = model(frames, rppg_feat, blink_feat)
                 losses = criterion(outputs, label, blink_target=blink_labels)
 
-            # One-time: print output statistics
             if epoch == start_epoch and batch_idx == 0:
                 with torch.no_grad():
-                    logit = outputs["logit"]
-                    prob = torch.sigmoid(logit.float())
-                    print(f"  [DIAG] logit: {logit.tolist()} → prob: {prob.tolist()}")
-                    print(f"  [DIAG] losses: " + " | ".join(
-                        f"{k}={v.item():.4f}" if torch.is_tensor(v) else f"{k}={v:.4f}"
-                        for k, v in losses.items()))
+                    prob = torch.sigmoid(outputs["logit"].float())
+                    print(f"  [DIAG] logit: {outputs['logit'].tolist()} → prob: {prob.tolist()}")
+                    print(f"  [DIAG] loss: {losses['total'].item():.4f}")
+                    if device.type == "cuda":
+                        print(f"  [DIAG] VRAM after forward: {torch.cuda.memory_allocated()/1e9:.2f} GB")
 
-            # Scale loss by accumulation steps for correct gradient magnitude
-            loss_tensor = losses["total"] / accum_steps
+            loss = losses["total"] / accum_steps
 
             if scaler:
-                scaler.scale(loss_tensor).backward()
+                scaler.scale(loss).backward()
             else:
-                loss_tensor.backward()
+                loss.backward()
 
-            # Step optimizer every accum_steps batches (or at end of epoch)
-            if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == len(train_dl):
+            if (batch_idx + 1) % accum_steps == 0 or (batch_idx + 1) == steps_per_epoch:
                 if scaler:
                     scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
@@ -289,104 +226,85 @@ def train(args):
                     optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()
-                # Free accumulated computation graph memory
-                if device.type == "cuda":
-                    torch.cuda.empty_cache()
 
-            for k, v in losses.items():
-                if k in epoch_losses:
-                    epoch_losses[k].append(v.item() if torch.is_tensor(v) else float(v))
-
-            # Collect predictions for collapse detection
+            epoch_loss.append(losses["total"].item())
             with torch.no_grad():
                 probs = torch.sigmoid(outputs["logit"].float()).cpu().numpy()
                 epoch_preds.extend(probs.tolist())
 
             global_step += 1
-            # Periodic VRAM check (every 100 steps)
-            if device.type == "cuda" and global_step % 100 == 0:
-                alloc = torch.cuda.memory_allocated() / 1e9
-                reserved = torch.cuda.memory_reserved() / 1e9
-                pbar.set_postfix_str(f"VRAM={alloc:.1f}/{reserved:.1f}GB")
 
-            if global_step % args.log_interval == 0:
-                logger.log({
-                    "step/loss_total": losses["total"].item() if torch.is_tensor(losses["total"]) else losses["total"],
-                    "step/loss_cls": losses["cls"].item() if torch.is_tensor(losses["cls"]) else losses["cls"],
-                    "step/loss_pulse": losses["pulse"].item() if torch.is_tensor(losses["pulse"]) else losses["pulse"],
-                    "step/loss_blink": losses["blink"].item() if torch.is_tensor(losses["blink"]) else losses["blink"],
-                }, step=global_step)
+            # Progress update every 50 steps
+            if batch_idx > 0 and batch_idx % 50 == 0:
+                elapsed = time.time() - epoch_start
+                eta = elapsed / batch_idx * (steps_per_epoch - batch_idx)
+                avg_loss = np.mean(epoch_loss[-50:])
+                pbar.set_postfix_str(f"loss={avg_loss:.3f} ETA={eta/60:.0f}m")
 
-        # ─── Collapse detection & recovery ──────────────────────────────────
-        epoch_preds_arr = np.array(epoch_preds)
-        pred_mean = epoch_preds_arr.mean()
-        pred_std = epoch_preds_arr.std()
-        frac_above_05 = (epoch_preds_arr > 0.5).mean()
-        print(f"  [Collapse check] pred_mean={pred_mean:.3f} pred_std={pred_std:.3f} "
-              f"frac_fake={frac_above_05:.3f}")
+        # ─── Epoch stats ──────────────────────────────────────────────────────
+        epoch_time = time.time() - epoch_start
+        preds_arr = np.array(epoch_preds)
+        pred_mean = preds_arr.mean()
+        pred_std = preds_arr.std()
+        frac_fake = (preds_arr > 0.5).mean()
+        mean_loss = np.mean(epoch_loss)
+
+        print(f"  [Stats] pred_mean={pred_mean:.3f} pred_std={pred_std:.3f} "
+              f"frac_fake={frac_fake:.3f} time={epoch_time/60:.1f}m")
+
         if pred_std < 0.05:
-            print(f"  *** WARNING: Prediction collapse detected! std={pred_std:.4f} "
-                  f"(all predictions ~{pred_mean:.2f}). Model is not discriminating. ***")
-            # Auto-recover: reinitialize classification head to break the collapse
+            print(f"  *** COLLAPSE: std={pred_std:.4f} — model not discriminating ***")
             if epoch <= 2:
-                print("  → Auto-recovery: reinitializing cls_head weights")
-                for m in base_model.cls_head.modules():
+                print("  → Reinitializing cls_head")
+                for m in model.cls_head.modules():
                     if isinstance(m, nn.Linear):
-                        nn.init.trunc_normal_(m.weight, std=0.02)
+                        nn.init.xavier_uniform_(m.weight)
                         if m.bias is not None:
                             nn.init.zeros_(m.bias)
-                # Also halve the learning rate to prevent re-collapse
-                for pg in optimizer.param_groups:
-                    pg['lr'] *= 0.5
-                print(f"  → Halved learning rates. New head LR: {optimizer.param_groups[3]['lr']:.2e}")
 
         # ─── Validation ───────────────────────────────────────────────────────
         val_metrics = evaluate(model, val_dl, device, scaler, split="val")
+        val_auc = val_metrics.get("auc", 0.0)
 
-        metrics = {
+        print(f"Epoch {epoch:2d} | loss={mean_loss:.3f} | "
+              f"val_auc={val_auc:.4f} val_eer={val_metrics.get('eer', 0):.4f} "
+              f"val_ece={val_metrics.get('ece', 0):.4f}")
+
+        logger.log({
             "epoch": epoch,
-            **{f"train/{k}": np.mean(v) for k, v in epoch_losses.items() if v},
+            "train/loss": mean_loss,
+            "train/pred_std": float(pred_std),
             **{f"val/{k}": v for k, v in val_metrics.items()},
             "lr": scheduler.get_last_lr()[0],
-            "train/pred_mean": float(pred_mean),
-            "train/pred_std": float(pred_std),
-        }
-        logger.log(metrics, step=epoch)
+        }, step=epoch)
 
-        print(
-            f"Epoch {epoch:3d} | "
-            f"loss={metrics.get('train/total', 0):.3f} | "
-            f"val_auc={val_metrics.get('auc', 0):.4f} "
-            f"val_eer={val_metrics.get('eer', 0):.4f} "
-            f"val_ece={val_metrics.get('ece', 0):.4f}"
-        )
-        state_dict = model.module.state_dict() if isinstance(model, torch.nn.DataParallel) else model.state_dict()
-        # Save best by AUC
-        val_auc = val_metrics.get("auc", 0.0)
+        # Save checkpoints
+        state_dict = model.state_dict()
         if val_auc > best_val_auc:
             best_val_auc = val_auc
-            ckpt_path = out_dir / "best_model.pt"
-            torch.save({
-                "epoch": epoch,
-                "model_state_dict": state_dict,
-                "val_auc": val_auc,
-                "config": cfg,
-                "args": vars(args),
-            }, ckpt_path)
-            print(f"  ✓ New best AUC={val_auc:.4f} → {ckpt_path}")
+            torch.save({"epoch": epoch, "model_state_dict": state_dict,
+                        "val_auc": val_auc, "config": cfg, "args": vars(args)},
+                       out_dir / "best_model.pt")
+            print(f"  ✓ New best AUC={val_auc:.4f}")
 
-        # Save latest
-        torch.save({
-            "epoch": epoch,
-            "model_state_dict": state_dict,
-            "optimizer_state_dict": optimizer.state_dict(),
-            "val_auc": val_auc,
-        }, out_dir / "latest.pt")
+        torch.save({"epoch": epoch, "model_state_dict": state_dict,
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "val_auc": val_auc}, out_dir / "latest.pt")
 
-    # ─── Final test evaluation ─────────────────────────────────────────────────
-    # FIX: weights_only=False for PyTorch 2.6 (ModelConfig is a custom class)
-    best_ckpt = torch.load(out_dir / "best_model.pt", map_location=device, weights_only=False)
-    model.load_state_dict(best_ckpt["model_state_dict"])
+        # Time check — abort if we'll exceed Kaggle limit
+        total_elapsed = time.time() - train_start
+        remaining_epochs = args.epochs - epoch
+        time_per_epoch = total_elapsed / (epoch - start_epoch + 1)
+        if remaining_epochs > 0 and total_elapsed + time_per_epoch * remaining_epochs > 10 * 3600:
+            print(f"  ⚠ Time limit approaching ({total_elapsed/3600:.1f}h elapsed). "
+                  f"Stopping early at epoch {epoch}.")
+            break
+
+    # ─── Final test ───────────────────────────────────────────────────────────
+    best_path = out_dir / "best_model.pt"
+    if best_path.exists():
+        best_ckpt = torch.load(best_path, map_location=device, weights_only=False)
+        model.load_state_dict(best_ckpt["model_state_dict"])
     test_metrics = evaluate(model, test_dl, device, scaler, split="test")
 
     print("\n" + "=" * 50)
@@ -394,61 +312,58 @@ def train(args):
     for k, v in test_metrics.items():
         print(f"  {k}: {v:.4f}")
     print("=" * 50)
+    print(f"Total training time: {(time.time() - train_start)/3600:.2f}h")
 
-    logger.log_summary({"best_val_auc": best_val_auc, **{f"test/{k}": v for k, v in test_metrics.items()}})
+    logger.log_summary({"best_val_auc": best_val_auc,
+                        **{f"test/{k}": v for k, v in test_metrics.items()}})
     logger.finish()
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="P3 PhysioNet Phase 2: Full detection training")
+    p = argparse.ArgumentParser(description="P3 PhysioNet W3 Training")
     p.add_argument("--ff_root", default=None)
     p.add_argument("--celebdf_root", default=None)
     p.add_argument("--dfdc_root", default=None)
     p.add_argument("--pretrain_ckpt", default=None)
-    p.add_argument("--resume", action="store_true", help="Resume from latest.pt checkpoint")
-    p.add_argument("--skip_cache", action="store_true", help="Skip feature cache warmup (use if already cached)")
+    p.add_argument("--resume", action="store_true")
+    p.add_argument("--skip_cache", action="store_true")
     p.add_argument("--out_dir", default="./checkpoints")
     p.add_argument("--cache_dir", default="./logs/signal_cache")
-    p.add_argument("--fallback_cache_dir", nargs="*", default=None,
-                   help="Read-only cache dirs to check before recomputing features (e.g. Kaggle input datasets)")
+    p.add_argument("--fallback_cache_dir", nargs="*", default=None)
     p.add_argument("--log_dir", default="./logs")
     p.add_argument("--run_name", default=None)
 
     # Model
     p.add_argument("--backbone", default="efficientnet_b4")
     p.add_argument("--temporal_model", default="transformer", choices=["transformer", "lstm", "mamba"])
-    p.add_argument("--temporal_pool", default="mean", choices=["mean", "transformer"],
-                   help="'mean' = skip transformer, just mean-pool frame features (stable for small batch). 'transformer' = full temporal encoder.")
-    p.add_argument("--use_physio_fusion", action="store_true", default=True,
-                   help="Fuse rPPG+blink features into classification. Use --no_physio_fusion to disable.")
-    p.add_argument("--no_physio_fusion", dest="use_physio_fusion", action="store_false",
-                   help="Bypass rPPG/blink fusion — classify from temporal features only.")
-    p.add_argument("--clip_len", type=int, default=64)
+    p.add_argument("--temporal_pool", default="mean", choices=["mean", "transformer"])
+    p.add_argument("--use_physio_fusion", action="store_true", default=True)
+    p.add_argument("--no_physio_fusion", dest="use_physio_fusion", action="store_false")
+    p.add_argument("--clip_len", type=int, default=32)
     p.add_argument("--img_size", type=int, default=224)
 
     # Training
-    p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--batch_size", type=int, default=8)
+    p.add_argument("--epochs", type=int, default=5)
+    p.add_argument("--batch_size", type=int, default=4)
+    p.add_argument("--max_train_samples", type=int, default=2000,
+                   help="Cap training samples per epoch (0 = use all). "
+                        "2000 samples / bs=4 = 500 steps ≈ 25 min/epoch on T4.")
     p.add_argument("--lr_backbone", type=float, default=1e-5)
-    p.add_argument("--lr_head", type=float, default=1e-4)
+    p.add_argument("--lr_head", type=float, default=3e-4)
     p.add_argument("--lr_temporal", type=float, default=5e-5)
     p.add_argument("--weight_decay", type=float, default=1e-4)
-    p.add_argument("--warmup_epochs", type=int, default=2)
     p.add_argument("--clip_grad", type=float, default=1.0)
-    p.add_argument("--grad_accum", type=int, default=1,
-                   help="Gradient accumulation steps. Effective batch = batch_size * grad_accum.")
-    p.add_argument("--num_workers", type=int, default=4)
+    p.add_argument("--grad_accum", type=int, default=4)
+    p.add_argument("--num_workers", type=int, default=2)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--fp16", action="store_true", default=True)
-    p.add_argument("--log_interval", type=int, default=20)
 
-    # Loss weights
+    # Loss
     p.add_argument("--w_class", type=float, default=1.0)
-    p.add_argument("--w_pulse", type=float, default=0.4)
-    p.add_argument("--w_blink", type=float, default=0.3)
-    p.add_argument("--w_contrastive", type=float, default=0.1)
-    p.add_argument("--pos_weight", type=float, default=1.0,
-                   help="BCE pos_weight for real class. Default=1.0 triggers auto-compute from class ratio.")
+    p.add_argument("--w_pulse", type=float, default=0.0)
+    p.add_argument("--w_blink", type=float, default=0.0)
+    p.add_argument("--w_contrastive", type=float, default=0.0)
+    p.add_argument("--pos_weight", type=float, default=1.0)
 
     return p.parse_args()
 

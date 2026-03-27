@@ -147,7 +147,7 @@ def evaluate(
         blink_feat = batch["blink_feat"].to(device)
         label = batch["label"].cpu().numpy()
 
-        with torch.cuda.amp.autocast(enabled=(scaler is not None)):
+        with torch.amp.autocast("cuda", enabled=(scaler is not None)):
             outputs = model(frames, rppg_feat, blink_feat)
             # Cast to float32 before sigmoid to avoid fp16 overflow → NaN
             probs = torch.sigmoid(outputs["logit"].float()).cpu().numpy()
@@ -174,7 +174,7 @@ def eval_standalone(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load model
-    ckpt = torch.load(args.checkpoint, map_location=device)
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     cfg = ckpt["config"]
     model = PhysioNet(cfg).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
