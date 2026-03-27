@@ -540,10 +540,10 @@ def build_dataloaders(
     sampler = WeightedRandomSampler(weights, len(weights), replacement=True)
 
     # drop_last=True avoids partial batches (important with small batch sizes)
-    # timeout=120 kills hung workers after 2 min (prevents silent DataLoader hangs)
-    # persistent_workers keeps workers alive between epochs (avoids re-spawn overhead)
-    dl_kwargs = dict(pin_memory=True, timeout=120)
+    # timeout + persistent_workers only valid with num_workers > 0
+    dl_kwargs = dict(pin_memory=True)
     if num_workers > 0:
+        dl_kwargs["timeout"] = 120       # kill hung workers after 2 min
         dl_kwargs["persistent_workers"] = True
     train_dl = DataLoader(train_ds, batch_size=batch_size, sampler=sampler, num_workers=num_workers, drop_last=True, **dl_kwargs)
     val_dl = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=num_workers, **dl_kwargs)
