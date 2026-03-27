@@ -180,15 +180,32 @@ class PNGFrameDataset(Dataset):
                 img = img[:, ::-1, :].copy()
             # Random brightness/contrast jitter
             if random.random() > 0.5:
-                brightness = random.uniform(0.85, 1.15)
+                brightness = random.uniform(0.8, 1.2)
                 img = np.clip(img * brightness, 0, 1)
+            # Random saturation jitter
+            if random.random() > 0.5:
+                gray = np.mean(img, axis=2, keepdims=True)
+                alpha = random.uniform(0.7, 1.3)
+                img = np.clip(alpha * img + (1 - alpha) * gray, 0, 1).astype(np.float32)
+            # Random Gaussian noise
+            if random.random() > 0.6:
+                noise = np.random.normal(0, 0.02, img.shape).astype(np.float32)
+                img = np.clip(img + noise, 0, 1)
             # Random JPEG compression artifact (simulates different quality)
-            if random.random() > 0.7:
-                quality = random.randint(30, 95)
+            if random.random() > 0.6:
+                quality = random.randint(20, 95)
                 encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
                 _, buf = cv2.imencode('.jpg', (img * 255).astype(np.uint8)[..., ::-1], encode_param)
                 img = cv2.imdecode(buf, cv2.IMREAD_COLOR)
                 img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+            # Random erasing (cutout) — masks a random patch
+            if random.random() > 0.6:
+                h, w = img.shape[:2]
+                eh = random.randint(int(h * 0.05), int(h * 0.25))
+                ew = random.randint(int(w * 0.05), int(w * 0.25))
+                ey = random.randint(0, h - eh)
+                ex = random.randint(0, w - ew)
+                img[ey:ey+eh, ex:ex+ew, :] = np.random.uniform(0, 1, (eh, ew, 3)).astype(np.float32)
 
         # ImageNet normalize
         img = (img - self.mean) / self.std
@@ -203,18 +220,28 @@ class PNGFrameDataset(Dataset):
 # ─── Model ───────────────────────────────────────────────────────────────────
 
 class SimpleClassifier(nn.Module):
-    def __init__(self, backbone: str = "efficientnet_b4", pretrained: bool = True):
+    def __init__(self, backbone: str = "efficientnet_b4", pretrained: bool = True,
+                 dropout: float = 0.5):
         super().__init__()
-        self.backbone = timm.create_model(backbone, pretrained=pretrained, num_classes=0, global_pool="avg")
+        self.backbone = timm.create_model(backbone, pretrained=pretrained, num_classes=0,
+                                          global_pool="avg", drop_rate=0.2)
         feat_dim = self.backbone.num_features  # 1792 for efficientnet_b4
         self.head = nn.Sequential(
-            nn.Dropout(0.3),
-            nn.Linear(feat_dim, 1),
+            nn.LayerNorm(feat_dim),
+            nn.Dropout(dropout),
+            nn.Linear(feat_dim, 256),
+            nn.GELU(),
+            nn.Dropout(dropout / 2),
+            nn.Linear(256, 1),
         )
 
     def forward(self, x):
         feat = self.backbone(x)
         return self.head(feat).squeeze(-1)  # (B,)
+
+    def freeze_backbone(self, freeze: bool = True):
+        for p in self.backbone.parameters():
+            p.requires_grad = not freeze
 
 
 # ─── Training ────────────────────────────────────────────────────────────────
@@ -326,21 +353,28 @@ def train(args):
     print(f"Val: {len(val_ds)} | Test: {len(test_ds)}")
 
     # ─── Model ───────────────────────────────────────────────────────────
-    model = SimpleClassifier(args.backbone, pretrained=True).to(device)
+    model = SimpleClassifier(args.backbone, pretrained=True, dropout=args.dropout).to(device)
     total_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {total_params / 1e6:.1f}M params")
 
+    # Freeze backbone for first N epochs (train head only first)
+    if args.freeze_backbone_epochs > 0:
+        model.freeze_backbone(True)
+        print(f"Backbone FROZEN for first {args.freeze_backbone_epochs} epochs")
+
     # ─── Optimizer: lower LR for backbone, higher for head ──────────────
     optimizer = torch.optim.AdamW([
-        {"params": model.backbone.parameters(), "lr": args.lr * 0.1},
+        {"params": model.backbone.parameters(), "lr": args.lr * 0.01},
         {"params": model.head.parameters(), "lr": args.lr},
-    ], weight_decay=1e-4)
+    ], weight_decay=args.weight_decay)
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
         optimizer, T_max=args.epochs, eta_min=1e-6
     )
     scaler = torch.amp.GradScaler("cuda") if args.fp16 and device.type == "cuda" else None
 
+    # Label smoothing: soft targets prevent overconfident predictions
+    smooth = args.label_smoothing
     criterion = nn.BCEWithLogitsLoss()
 
     out_dir = Path(args.out_dir)
@@ -351,6 +385,12 @@ def train(args):
     # ─── Train ───────────────────────────────────────────────────────────
     for epoch in range(1, args.epochs + 1):
         epoch_start = time.time()
+
+        # Unfreeze backbone after freeze period
+        if args.freeze_backbone_epochs > 0 and epoch == args.freeze_backbone_epochs + 1:
+            model.freeze_backbone(False)
+            print(f"  >> Backbone UNFROZEN at epoch {epoch}")
+
         model.train()
         losses = []
         all_preds, all_targets = [], []
@@ -360,11 +400,17 @@ def train(args):
             frames = batch["frame"].to(device, non_blocking=True)
             labels_b = batch["label"].to(device, non_blocking=True)
 
+            # Apply label smoothing: 0 → smooth, 1 → 1-smooth
+            if smooth > 0:
+                labels_smooth = labels_b * (1 - smooth) + (1 - labels_b) * smooth
+            else:
+                labels_smooth = labels_b
+
             optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast("cuda", enabled=(scaler is not None)):
                 logits = model(frames)
-                loss = criterion(logits, labels_b)
+                loss = criterion(logits, labels_smooth)
 
             if scaler:
                 scaler.scale(loss).backward()
@@ -510,6 +556,11 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--dropout", type=float, default=0.5)
+    p.add_argument("--weight_decay", type=float, default=1e-3)
+    p.add_argument("--label_smoothing", type=float, default=0.05)
+    p.add_argument("--freeze_backbone_epochs", type=int, default=2,
+                   help="Freeze backbone for first N epochs (head-only warmup)")
     p.add_argument("--frames_per_video", type=int, default=5,
                    help="Number of random frames per video per epoch (expands dataset)")
     p.add_argument("--num_workers", type=int, default=2)
