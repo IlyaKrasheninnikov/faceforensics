@@ -221,18 +221,14 @@ class PNGFrameDataset(Dataset):
 
 class SimpleClassifier(nn.Module):
     def __init__(self, backbone: str = "efficientnet_b4", pretrained: bool = True,
-                 dropout: float = 0.5):
+                 dropout: float = 0.3):
         super().__init__()
         self.backbone = timm.create_model(backbone, pretrained=pretrained, num_classes=0,
-                                          global_pool="avg", drop_rate=0.2)
+                                          global_pool="avg")
         feat_dim = self.backbone.num_features  # 1792 for efficientnet_b4
         self.head = nn.Sequential(
-            nn.LayerNorm(feat_dim),
             nn.Dropout(dropout),
-            nn.Linear(feat_dim, 256),
-            nn.GELU(),
-            nn.Dropout(dropout / 2),
-            nn.Linear(256, 1),
+            nn.Linear(feat_dim, 1),
         )
 
     def forward(self, x):
@@ -363,8 +359,9 @@ def train(args):
         print(f"Backbone FROZEN for first {args.freeze_backbone_epochs} epochs")
 
     # ─── Optimizer: lower LR for backbone, higher for head ──────────────
+    backbone_lr_ratio = 0.05 if args.freeze_backbone_epochs > 0 else 0.1
     optimizer = torch.optim.AdamW([
-        {"params": model.backbone.parameters(), "lr": args.lr * 0.01},
+        {"params": model.backbone.parameters(), "lr": args.lr * backbone_lr_ratio},
         {"params": model.head.parameters(), "lr": args.lr},
     ], weight_decay=args.weight_decay)
 
@@ -556,11 +553,11 @@ def parse_args():
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch_size", type=int, default=32)
     p.add_argument("--lr", type=float, default=1e-3)
-    p.add_argument("--dropout", type=float, default=0.5)
-    p.add_argument("--weight_decay", type=float, default=1e-3)
+    p.add_argument("--dropout", type=float, default=0.3)
+    p.add_argument("--weight_decay", type=float, default=5e-4)
     p.add_argument("--label_smoothing", type=float, default=0.05)
-    p.add_argument("--freeze_backbone_epochs", type=int, default=2,
-                   help="Freeze backbone for first N epochs (head-only warmup)")
+    p.add_argument("--freeze_backbone_epochs", type=int, default=0,
+                   help="Freeze backbone for first N epochs (0=no freeze)")
     p.add_argument("--frames_per_video", type=int, default=5,
                    help="Number of random frames per video per epoch (expands dataset)")
     p.add_argument("--num_workers", type=int, default=2)
