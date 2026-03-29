@@ -31,6 +31,7 @@ Usage (Kaggle, Stage 1):
 """
 
 import argparse
+import math
 import os
 import random
 import sys
@@ -387,9 +388,14 @@ def train(args):
         {"params": other_params,    "lr": args.lr_head},
     ], weight_decay=args.weight_decay)
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.epochs, eta_min=1e-6
-    )
+    # Warmup for first 2 epochs, then cosine decay
+    warmup_epochs = min(2, args.epochs // 5)
+    def lr_lambda(epoch):
+        if epoch < warmup_epochs:
+            return (epoch + 1) / warmup_epochs
+        progress = (epoch - warmup_epochs) / max(1, args.epochs - warmup_epochs)
+        return 0.01 + 0.99 * 0.5 * (1 + math.cos(math.pi * progress))
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     scaler = torch.amp.GradScaler("cuda") if args.fp16 and device.type == "cuda" else None
 
     # ─── Loss ────────────────────────────────────────────────────────────
@@ -593,8 +599,8 @@ def parse_args():
     p.add_argument("--batch_size",             type=int,   default=6)
     p.add_argument("--clips_per_video",        type=int,   default=1,
                    help="Clips sampled per video per epoch")
-    p.add_argument("--max_train_videos",       type=int,   default=2400,
-                   help="Cap training videos per epoch (controls epoch length)")
+    p.add_argument("--max_train_videos",       type=int,   default=None,
+                   help="Cap training videos per epoch (None=use all)")
     p.add_argument("--lr_backbone",            type=float, default=1e-5)
     p.add_argument("--lr_head",                type=float, default=1e-4)
     p.add_argument("--weight_decay",           type=float, default=1e-4)
