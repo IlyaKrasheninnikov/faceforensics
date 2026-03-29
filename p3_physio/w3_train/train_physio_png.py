@@ -448,13 +448,19 @@ def train(args):
             pbar.set_postfix(loss=f"{loss.item():.4f}")
 
             with torch.no_grad():
-                probs = torch.sigmoid(logits.float()).cpu().numpy()
+                probs = torch.sigmoid(logits.float().clamp(-20, 20)).cpu().numpy()
+                probs = np.nan_to_num(probs, nan=0.5)
                 all_preds.extend(probs.tolist())
                 all_targets.extend(labels_b.cpu().numpy().tolist())
 
         scheduler.step()
 
         preds_arr = np.array(all_preds)
+        n_nan = np.isnan(preds_arr).sum()
+        if n_nan > 0:
+            print(f"  [WARN] {n_nan} NaN predictions in train (replaced with 0.5)")
+            preds_arr = np.nan_to_num(preds_arr, nan=0.5)
+            all_preds = preds_arr.tolist()
         train_auc = roc_auc_score(all_targets, all_preds)
         print(f"  [Train] pred_mean={preds_arr.mean():.3f} pred_std={preds_arr.std():.3f} "
               f"frac>0.5={(preds_arr > 0.5).mean():.3f}")
@@ -470,11 +476,12 @@ def train(args):
                 with torch.amp.autocast("cuda", enabled=(scaler is not None)):
                     outputs = model(frames, rppg if use_physio else None,
                                             blink if use_physio else None)
-                probs = torch.sigmoid(outputs["logit"].float()).cpu().numpy()
+                probs = torch.sigmoid(outputs["logit"].float().clamp(-20, 20)).cpu().numpy()
+                probs = np.nan_to_num(probs, nan=0.5)
                 val_preds.extend(probs.tolist())
                 val_targets.extend(batch["label"].numpy().tolist())
 
-        val_preds_arr  = np.array(val_preds)
+        val_preds_arr   = np.nan_to_num(np.array(val_preds), nan=0.5)
         val_targets_arr = np.array(val_targets)
         val_auc = roc_auc_score(val_targets_arr, val_preds_arr)
         val_eer = compute_eer(val_preds_arr, val_targets_arr)
@@ -533,11 +540,12 @@ def train(args):
             frames = batch["frames"].to(device, non_blocking=True)
             with torch.amp.autocast("cuda", enabled=(scaler is not None)):
                 outputs = model(frames)
-            probs = torch.sigmoid(outputs["logit"].float()).cpu().numpy()
+            probs = torch.sigmoid(outputs["logit"].float().clamp(-20, 20)).cpu().numpy()
+            probs = np.nan_to_num(probs, nan=0.5)
             test_preds.extend(probs.tolist())
             test_targets.extend(batch["label"].numpy().tolist())
 
-    test_auc = roc_auc_score(test_targets, test_preds)
+    test_auc = roc_auc_score(test_targets, np.nan_to_num(test_preds, nan=0.5))
     test_eer = compute_eer(np.array(test_preds), np.array(test_targets))
     total_time = time.time() - start_time
 
