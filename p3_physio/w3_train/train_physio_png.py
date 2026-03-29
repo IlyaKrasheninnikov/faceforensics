@@ -123,7 +123,15 @@ class PNGClipDataset(Dataset):
         img_size: int = 224,
         augment: bool = False,
         clips_per_video: int = 1,
+        max_videos: Optional[int] = None,
     ):
+        if max_videos is not None and max_videos < len(video_dirs):
+            # Stratified cap: keep proportional real/fake ratio
+            indices = list(range(len(video_dirs)))
+            random.shuffle(indices)
+            indices = indices[:max_videos]
+            video_dirs = [video_dirs[i] for i in indices]
+            labels     = [labels[i]     for i in indices]
         self.video_dirs = video_dirs
         self.labels = labels
         self.clip_len = clip_len
@@ -176,28 +184,15 @@ class PNGClipDataset(Dataset):
         # BGR → RGB for all frames in clip
         clip = clip[:, :, :, ::-1].copy()
 
-        # Augmentation (spatial only — applied consistently across the clip)
+        # Augmentation — clip-consistent (same transform applied to all frames)
         if self.augment:
-            # Horizontal flip — same decision for all frames
+            # Horizontal flip
             if random.random() > 0.5:
                 clip = clip[:, :, ::-1, :].copy()
-            # Brightness jitter — same factor for all frames (temporal consistency)
+            # Brightness jitter — same factor for temporal consistency
             if random.random() > 0.5:
                 factor = random.uniform(0.85, 1.15)
-                clip = np.clip(clip * factor, 0, 1)
-            # JPEG re-compression
-            if random.random() > 0.7:
-                quality = random.randint(30, 95)
-                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
-                compressed = []
-                for i in range(0, len(clip), 4):  # compress every 4th frame to save time
-                    chunk = clip[i:i+4]
-                    for frame in chunk:
-                        bgr = (frame[:, :, ::-1] * 255).astype(np.uint8)
-                        _, buf = cv2.imencode('.jpg', bgr, encode_param)
-                        dec = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-                        compressed.append(dec[:, :, ::-1].astype(np.float32) / 255.0)
-                clip = np.stack(compressed, axis=0)
+                clip = np.clip(clip * factor, 0, 1).astype(np.float32)
 
         # ImageNet normalize: (T, H, W, 3) → (T, 3, H, W)
         clip = (clip - IMAGENET_MEAN) / IMAGENET_STD
@@ -325,12 +320,13 @@ def train(args):
     print(f"Split: {n_train_ids}/{n_val_ids}/{n_ids-n_train_ids-n_val_ids} source IDs")
 
     train_ds = PNGClipDataset(train_dirs, train_labels, args.clip_len, args.img_size,
-                               augment=True, clips_per_video=args.clips_per_video)
+                               augment=True, clips_per_video=args.clips_per_video,
+                               max_videos=args.max_train_videos)
     val_ds   = PNGClipDataset(val_dirs,   val_labels,   args.clip_len, args.img_size)
     test_ds  = PNGClipDataset(test_dirs,  test_labels,  args.clip_len, args.img_size)
 
-    # Balanced sampler
-    tl = np.array(train_labels)
+    # Balanced sampler — use actual dataset labels (may be capped)
+    tl = np.array(train_ds.labels)
     n_real = int((tl == 0).sum())
     n_fake = int((tl == 1).sum())
     per_video_w = np.where(tl == 0, 1.0 / (n_real + 1), 1.0 / (n_fake + 1))
@@ -593,10 +589,12 @@ def parse_args():
     p.add_argument("--w_contrastive", type=float, default=0.0)
 
     # Training
-    p.add_argument("--epochs",                 type=int,   default=10)
+    p.add_argument("--epochs",                 type=int,   default=20)
     p.add_argument("--batch_size",             type=int,   default=6)
-    p.add_argument("--clips_per_video",        type=int,   default=2,
+    p.add_argument("--clips_per_video",        type=int,   default=1,
                    help="Clips sampled per video per epoch")
+    p.add_argument("--max_train_videos",       type=int,   default=2400,
+                   help="Cap training videos per epoch (controls epoch length)")
     p.add_argument("--lr_backbone",            type=float, default=1e-5)
     p.add_argument("--lr_head",                type=float, default=1e-4)
     p.add_argument("--weight_decay",           type=float, default=1e-4)
