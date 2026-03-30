@@ -383,10 +383,19 @@ def train(args):
     other_params    = [p for p in model.parameters()
                        if not any(p is bp for bp in backbone_params)]
 
-    optimizer = torch.optim.AdamW([
-        {"params": backbone_params, "lr": args.lr_backbone},
-        {"params": other_params,    "lr": args.lr_head},
-    ], weight_decay=args.weight_decay)
+    # Only include backbone in optimizer if it will ever be unfrozen
+    backbone_ever_unfrozen = (args.freeze_backbone_epochs < args.epochs)
+    if backbone_ever_unfrozen and args.lr_backbone > 0:
+        param_groups = [
+            {"params": backbone_params, "lr": args.lr_backbone},
+            {"params": other_params,    "lr": args.lr_head},
+        ]
+    else:
+        # Backbone frozen for entire run — don't include in optimizer at all
+        param_groups = [
+            {"params": other_params, "lr": args.lr_head},
+        ]
+    optimizer = torch.optim.AdamW(param_groups, weight_decay=args.weight_decay)
 
     # Warmup for first 2 epochs, then cosine decay
     warmup_epochs = min(2, args.epochs // 5)
@@ -506,8 +515,8 @@ def train(args):
                     "train/auc": train_auc,
                     "val/auc": val_auc,
                     "val/eer": val_eer,
-                    "lr_backbone": optimizer.param_groups[0]["lr"],
-                    "lr_head":     optimizer.param_groups[1]["lr"],
+                    "lr_backbone": optimizer.param_groups[0]["lr"] if len(optimizer.param_groups) > 1 else 0.0,
+                    "lr_head":     optimizer.param_groups[-1]["lr"],
                 }, step=epoch)
             except Exception:
                 pass
