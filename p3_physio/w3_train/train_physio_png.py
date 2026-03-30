@@ -162,11 +162,15 @@ class PNGClipDataset(Dataset):
         if n == 0:
             clip = np.zeros((self.clip_len, self.img_size, self.img_size, 3), dtype=np.float32)
         else:
-            # Pick start frame from middle 80% of video
             max_start = max(0, n - self.clip_len)
-            lo = int(max_start * 0.1)
-            hi = max(lo, int(max_start * 0.9))
-            start = random.randint(lo, hi)
+            if self.augment:
+                # Training: random start from middle 80%
+                lo = int(max_start * 0.1)
+                hi = max(lo, int(max_start * 0.9))
+                start = random.randint(lo, hi)
+            else:
+                # Val/test: fixed center clip — deterministic, no epoch-to-epoch variance
+                start = max_start // 2
 
             # Gather clip_len frames, cycling if video is shorter
             indices = [(start + i) % n for i in range(self.clip_len)]
