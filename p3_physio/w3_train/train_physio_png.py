@@ -295,7 +295,9 @@ def train(args):
         id_to_indices.setdefault(sid, []).append(i)
 
     unique_ids = sorted(id_to_indices.keys())
-    random.shuffle(unique_ids)
+    # Fixed seed for split — val set must be identical across all runs
+    rng = random.Random(42)
+    rng.shuffle(unique_ids)
     n_ids = len(unique_ids)
     n_train_ids = int(n_ids * 0.8)
     n_val_ids   = int(n_ids * 0.1)
@@ -401,13 +403,30 @@ def train(args):
         ]
     optimizer = torch.optim.AdamW(param_groups, weight_decay=args.weight_decay)
 
-    # Warmup for first 2 epochs, then cosine decay
-    warmup_epochs = min(2, args.epochs // 5)
-    def lr_lambda(epoch):
-        if epoch < warmup_epochs:
-            return (epoch + 1) / warmup_epochs
-        progress = (epoch - warmup_epochs) / max(1, args.epochs - warmup_epochs)
-        return 0.01 + 0.99 * 0.5 * (1 + math.cos(math.pi * progress))
+    # LR schedule:
+    #   flat_then_cosine — keep full LR during frozen phase, cosine only after unfreeze
+    #   cosine           — warmup then cosine over all epochs (original behavior)
+    freeze_ep = args.freeze_backbone_epochs
+    warmup_epochs = min(2, max(1, freeze_ep // 5)) if freeze_ep > 0 else min(2, args.epochs // 5)
+    if args.lr_schedule == "flat_then_cosine" and freeze_ep > 0:
+        finetune_epochs = max(1, args.epochs - freeze_ep)
+        def lr_lambda(epoch):
+            # Phase 1 (frozen): warmup then flat
+            if epoch < freeze_ep:
+                if epoch < warmup_epochs:
+                    return (epoch + 1) / warmup_epochs
+                return 1.0  # flat at full LR
+            # Phase 2 (unfrozen): cosine decay over finetune_epochs
+            progress = (epoch - freeze_ep) / finetune_epochs
+            return 0.01 + 0.99 * 0.5 * (1 + math.cos(math.pi * progress))
+    else:
+        # Original cosine over all epochs
+        warmup_epochs = min(2, args.epochs // 5)
+        def lr_lambda(epoch):
+            if epoch < warmup_epochs:
+                return (epoch + 1) / warmup_epochs
+            progress = (epoch - warmup_epochs) / max(1, args.epochs - warmup_epochs)
+            return 0.01 + 0.99 * 0.5 * (1 + math.cos(math.pi * progress))
     scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     scaler = torch.amp.GradScaler("cuda") if args.fp16 and device.type == "cuda" else None
 
@@ -618,6 +637,8 @@ def parse_args():
     p.add_argument("--lr_head",                type=float, default=1e-4)
     p.add_argument("--weight_decay",           type=float, default=1e-4)
     p.add_argument("--freeze_backbone_epochs", type=int,   default=3)
+    p.add_argument("--lr_schedule", default="flat_then_cosine",
+                   choices=["cosine", "flat_then_cosine"])
     p.add_argument("--num_workers",            type=int,   default=2)
     p.add_argument("--seed",                   type=int,   default=42)
     p.add_argument("--fp16", action="store_true", default=True)
