@@ -316,11 +316,16 @@ class PhysioNet(nn.Module):
         if cfg.use_blink_head:
             self.blink_head = BlinkSequenceHead(cfg.temporal_dim, cfg.dropout)
 
+        # Learnable gate: scalar in [0,1] that blends mean-pool bypass with transformer output.
+        # Initialized to 0 so the model starts as pure mean-pool (stable) and learns to
+        # open the gate as the transformer converges.
+        self.temporal_gate = nn.Parameter(torch.zeros(1))
+
         self._init_weights()
 
     def _init_weights(self):
-        for m in [self.temporal_proj, self.fusion]:
-            if isinstance(m, nn.Linear):
+        for name, m in self.named_modules():
+            if isinstance(m, nn.Linear) and "frame_encoder" not in name:
                 nn.init.trunc_normal_(m.weight, std=0.02)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
@@ -350,8 +355,13 @@ class PhysioNet(nn.Module):
             temporal_out = temporal_in
             cls_token = temporal_in.mean(dim=1)            # (B, temporal_dim)
         else:
-            # Full transformer/lstm/mamba temporal encoder
-            temporal_out = self.temporal(temporal_in)       # (B, T, temporal_dim)
+            # Gated temporal encoder:
+            # gate=0 at init → pure mean pool (stable, uses pretrained backbone signal)
+            # gate learns to open as transformer converges → adds temporal refinement
+            mean_pool = temporal_in.mean(dim=1, keepdim=True).expand_as(temporal_in)
+            gate = torch.sigmoid(self.temporal_gate)
+            transformer_out = self.temporal(temporal_in)    # (B, T, temporal_dim)
+            temporal_out = (1 - gate) * mean_pool + gate * transformer_out
             cls_token = temporal_out.mean(dim=1)           # (B, temporal_dim)
 
         # 3. Fusion
