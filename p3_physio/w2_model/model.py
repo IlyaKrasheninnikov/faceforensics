@@ -316,10 +316,9 @@ class PhysioNet(nn.Module):
         if cfg.use_blink_head:
             self.blink_head = BlinkSequenceHead(cfg.temporal_dim, cfg.dropout)
 
-        # Learnable gate: scalar in [0,1] that blends mean-pool bypass with transformer output.
-        # Initialized to 0 so the model starts as pure mean-pool (stable) and learns to
-        # open the gate as the transformer converges.
-        self.temporal_gate = nn.Parameter(torch.zeros(1))
+        # Learnable gate: sigmoid(temporal_gate) blends mean-pool bypass with transformer output.
+        # sigmoid(-6) ≈ 0.0025 → starts as near-pure mean-pool; gate opens as transformer converges.
+        self.temporal_gate = nn.Parameter(torch.full((1,), -6.0))
 
         self._init_weights()
 
