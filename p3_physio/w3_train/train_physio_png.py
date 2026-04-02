@@ -438,6 +438,7 @@ def train(args):
     Path(args.log_dir).mkdir(parents=True, exist_ok=True)
 
     best_auc = 0.0
+    ema_val_auc = None   # EMA of val_auc — smoother signal for checkpoint saving
     start_time = time.time()
 
     # ─── Training loop ───────────────────────────────────────────────────
@@ -520,13 +521,17 @@ def train(args):
         val_auc = roc_auc_score(val_targets_arr, val_preds_arr)
         val_eer = compute_eer(val_preds_arr, val_targets_arr)
 
+        # EMA smoothing (α=0.3) — reduces checkpoint noise from 600-sample val set
+        ema_alpha = 0.3
+        ema_val_auc = val_auc if ema_val_auc is None else (ema_alpha * val_auc + (1 - ema_alpha) * ema_val_auc)
+
         avg_loss    = float(np.mean(losses))
         epoch_time  = time.time() - epoch_start
         total_time  = time.time() - start_time
 
         print(f"Epoch {epoch:3d} | loss={avg_loss:.4f} | "
               f"train_auc={train_auc:.4f} | "
-              f"val_auc={val_auc:.4f} val_eer={val_eer:.4f} | "
+              f"val_auc={val_auc:.4f} (ema={ema_val_auc:.4f}) val_eer={val_eer:.4f} | "
               f"pred_std={val_preds_arr.std():.3f} | "
               f"time={epoch_time:.0f}s total={total_time/60:.1f}min")
 
@@ -544,8 +549,8 @@ def train(args):
             except Exception:
                 pass
 
-        if val_auc > best_auc:
-            best_auc = val_auc
+        if ema_val_auc > best_auc:
+            best_auc = ema_val_auc
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
