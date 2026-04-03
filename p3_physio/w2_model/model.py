@@ -285,22 +285,30 @@ class PhysioNet(nn.Module):
         backbone_dim = self.frame_encoder.out_dim
 
         # 2. Temporal model (with projection from backbone_dim → temporal_dim)
-        self.temporal_proj = nn.Linear(backbone_dim, cfg.temporal_dim)
-
-        if cfg.temporal_model == "mamba" and MAMBA_AVAILABLE:
-            self.temporal = MambaTemporal(cfg.temporal_dim, cfg.temporal_layers)
-        elif cfg.temporal_model == "lstm":
-            self.temporal = LSTMTemporal(cfg.temporal_dim, cfg.temporal_dim, cfg.temporal_layers, cfg.temporal_dropout)
+        # Special case: "direct" pool skips temporal_proj entirely — classifies from
+        # mean-pooled backbone features directly. Avoids the 1792→temporal_dim bottleneck
+        # that loses discriminative information when temporal_dim << backbone_dim.
+        self._direct_pool = (cfg.temporal_pool == "mean" and cfg.temporal_dim == 0)
+        if self._direct_pool:
+            temporal_out_dim = backbone_dim
+            # No temporal_proj, no temporal model needed
         else:
-            self.temporal = TransformerTemporal(
-                cfg.temporal_dim, cfg.temporal_heads, cfg.temporal_layers, cfg.temporal_dropout
-            )
+            self.temporal_proj = nn.Linear(backbone_dim, cfg.temporal_dim)
+            if cfg.temporal_model == "mamba" and MAMBA_AVAILABLE:
+                self.temporal = MambaTemporal(cfg.temporal_dim, cfg.temporal_layers)
+            elif cfg.temporal_model == "lstm":
+                self.temporal = LSTMTemporal(cfg.temporal_dim, cfg.temporal_dim, cfg.temporal_layers, cfg.temporal_dropout)
+            else:
+                self.temporal = TransformerTemporal(
+                    cfg.temporal_dim, cfg.temporal_heads, cfg.temporal_layers, cfg.temporal_dropout
+                )
+            temporal_out_dim = cfg.temporal_dim
 
         # 3. Fusion: temporal CLS token + (optionally) explicit features
         if cfg.use_physio_fusion:
-            fusion_input_dim = cfg.temporal_dim + cfg.rppg_feature_dim + cfg.blink_feature_dim
+            fusion_input_dim = temporal_out_dim + cfg.rppg_feature_dim + cfg.blink_feature_dim
         else:
-            fusion_input_dim = cfg.temporal_dim
+            fusion_input_dim = temporal_out_dim
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_dim, cfg.fusion_dim),
             nn.GELU(),
@@ -309,12 +317,13 @@ class PhysioNet(nn.Module):
 
         # 4. Output heads
         self.cls_head = ClassificationHead(cfg.fusion_dim, cfg.dropout)
+        self._temporal_out_dim = temporal_out_dim
 
         if cfg.use_pulse_head:
-            self.pulse_head = PulseRegressionHead(cfg.temporal_dim, cfg.clip_len, cfg.dropout)
+            self.pulse_head = PulseRegressionHead(temporal_out_dim, cfg.clip_len, cfg.dropout)
 
         if cfg.use_blink_head:
-            self.blink_head = BlinkSequenceHead(cfg.temporal_dim, cfg.dropout)
+            self.blink_head = BlinkSequenceHead(temporal_out_dim, cfg.dropout)
 
         # Learnable gate: sigmoid(temporal_gate) blends mean-pool bypass with transformer output.
         # sigmoid(-6) ≈ 0.0025 → starts as near-pure mean-pool; gate opens as transformer converges.
@@ -347,21 +356,23 @@ class PhysioNet(nn.Module):
         frame_feats = self.frame_encoder(frames)           # (B, T, backbone_dim)
 
         # 2. Temporal modeling
-        temporal_in = self.temporal_proj(frame_feats)      # (B, T, temporal_dim)
-
-        if self.cfg.temporal_pool == "mean":
-            # Simple mean pool — no transformer overhead, stable with small batch
-            temporal_out = temporal_in
-            cls_token = temporal_in.mean(dim=1)            # (B, temporal_dim)
+        if self._direct_pool:
+            # Direct mean pool in backbone feature space — no projection bottleneck
+            temporal_out = frame_feats                     # (B, T, backbone_dim)
+            cls_token = frame_feats.mean(dim=1)            # (B, backbone_dim)
         else:
-            # Gated temporal encoder:
-            # gate=0 at init → pure mean pool (stable, uses pretrained backbone signal)
-            # gate learns to open as transformer converges → adds temporal refinement
-            mean_pool = temporal_in.mean(dim=1, keepdim=True).expand_as(temporal_in)
-            gate = torch.sigmoid(self.temporal_gate)
-            transformer_out = self.temporal(temporal_in)    # (B, T, temporal_dim)
-            temporal_out = (1 - gate) * mean_pool + gate * transformer_out
-            cls_token = temporal_out.mean(dim=1)           # (B, temporal_dim)
+            temporal_in = self.temporal_proj(frame_feats)  # (B, T, temporal_dim)
+            if self.cfg.temporal_pool == "mean":
+                temporal_out = temporal_in
+                cls_token = temporal_in.mean(dim=1)        # (B, temporal_dim)
+            else:
+                # Gated temporal encoder:
+                # sigmoid(-6)≈0.003 at init → near-pure mean-pool; opens as transformer converges
+                mean_pool = temporal_in.mean(dim=1, keepdim=True).expand_as(temporal_in)
+                gate = torch.sigmoid(self.temporal_gate)
+                transformer_out = self.temporal(temporal_in)
+                temporal_out = (1 - gate) * mean_pool + gate * transformer_out
+                cls_token = temporal_out.mean(dim=1)       # (B, temporal_dim)
 
         # 3. Fusion
         if self.cfg.use_physio_fusion:
