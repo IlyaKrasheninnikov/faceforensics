@@ -199,16 +199,25 @@ def hybrid_rppg_feature(rgb_signal: np.ndarray, fps: float) -> tuple:
 
 def process_video_folder(args_tuple) -> dict:
     """
-    Worker function: load PNGs from folder, extract rPPG feature, save .npy.
-    Returns dict with status info.
+    Worker function: load PNGs from video_dir, extract rPPG feature, save to out_dir.
+
+    Feature is saved at: out_dir/<manip>/<video_name>/rppg_feat.npy
+    This mirrors the source structure so PNGClipDataset can find it by path.
+    out_dir is writable (/kaggle/working/rppg_cache); source video_dir may be read-only.
     """
-    video_dir, fps, max_frames, force_recompute = args_tuple
+    video_dir, out_dir, fps, max_frames, force_recompute = args_tuple
     video_dir = Path(video_dir)
-    feat_path = video_dir / "rppg_feat.npy"
-    meta_path = video_dir / "rppg_meta.json"
+    out_dir   = Path(out_dir)
+
+    # Mirror structure: out_dir / manip / video_name /
+    save_dir  = out_dir / video_dir.parent.name / video_dir.name
+    feat_path = save_dir / "rppg_feat.npy"
+    meta_path = save_dir / "rppg_meta.json"
 
     if not force_recompute and feat_path.exists() and meta_path.exists():
         return {"video": video_dir.name, "status": "cached"}
+
+    save_dir.mkdir(parents=True, exist_ok=True)
 
     # Load frames
     frame_files = sorted([f for f in os.listdir(video_dir)
@@ -231,7 +240,6 @@ def process_video_folder(args_tuple) -> dict:
         frames.append(img.astype(np.float32) / 255.0)
 
     if len(frames) < 16:
-        # Too few frames — save zero feature
         np.save(feat_path, np.zeros(RPPG_FEAT_DIM, dtype=np.float32))
         with open(meta_path, "w") as f:
             json.dump({"snr_db": -99.0, "bpm": 0.0, "n_frames": len(frames),
@@ -274,8 +282,9 @@ def main(args):
 
     print(f"\nTotal: {len(all_folders)} video folders")
 
-    # Build work list — save features into the video folder itself
-    work = [(str(d), args.fps, args.max_frames, args.force) for d in all_folders]
+    # Build work list — save features into out_dir (source may be read-only)
+    work = [(str(d), str(out_dir), args.fps, args.max_frames, args.force)
+            for d in all_folders]
 
     start = time.time()
     n_ok = n_cached = n_err = 0
@@ -306,7 +315,7 @@ def main(args):
     elapsed = time.time() - start
     print(f"\nDone: {n_ok} extracted, {n_cached} cached, {n_err} errors")
     print(f"Time: {elapsed / 60:.1f} min")
-    print(f"Features saved to: <video_folder>/rppg_feat.npy")
+    print(f"Features saved to: {out_dir}/<manip>/<video_name>/rppg_feat.npy")
 
 
 def parse_args():
