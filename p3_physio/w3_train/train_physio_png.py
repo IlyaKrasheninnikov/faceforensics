@@ -125,6 +125,7 @@ class PNGClipDataset(Dataset):
         augment: bool = False,
         clips_per_video: int = 1,
         max_videos: Optional[int] = None,
+        rppg_cache_dir: Optional[str] = None,
     ):
         if max_videos is not None and max_videos < len(video_dirs):
             # Stratified cap: keep proportional real/fake ratio
@@ -139,6 +140,7 @@ class PNGClipDataset(Dataset):
         self.img_size = img_size
         self.augment = augment
         self.clips_per_video = clips_per_video
+        self.rppg_cache_dir = Path(rppg_cache_dir) if rppg_cache_dir else None
 
         # Pre-scan frame lists
         self.frame_lists: List[List[str]] = []
@@ -203,12 +205,14 @@ class PNGClipDataset(Dataset):
         clip = (clip - IMAGENET_MEAN) / IMAGENET_STD
         clip_tensor = torch.from_numpy(clip).permute(0, 3, 1, 2).float()  # (T, 3, H, W)
 
-        # Load pre-extracted rPPG feature if available
-        rppg_path = os.path.join(vdir, "rppg_feat.npy")
-        if os.path.exists(rppg_path):
-            rppg_feat = torch.from_numpy(np.load(rppg_path).astype(np.float32))
-        else:
-            rppg_feat = torch.zeros(128)
+        # Load pre-extracted rPPG feature from cache dir if available
+        # Cache mirrors source structure: cache_dir/<manip>/<video_name>/rppg_feat.npy
+        rppg_feat = torch.zeros(128)
+        if self.rppg_cache_dir is not None:
+            vpath = Path(vdir)
+            cache_feat = self.rppg_cache_dir / vpath.parent.name / vpath.name / "rppg_feat.npy"
+            if cache_feat.exists():
+                rppg_feat = torch.from_numpy(np.load(str(cache_feat)).astype(np.float32))
 
         return {
             "frames": clip_tensor,               # (T, 3, H, W)
@@ -333,11 +337,15 @@ def train(args):
 
     print(f"Split: {n_train_ids}/{n_val_ids}/{n_ids-n_train_ids-n_val_ids} source IDs")
 
+    rppg_cache = args.rppg_cache if hasattr(args, "rppg_cache") else None
     train_ds = PNGClipDataset(train_dirs, train_labels, args.clip_len, args.img_size,
                                augment=True, clips_per_video=args.clips_per_video,
-                               max_videos=args.max_train_videos)
-    val_ds   = PNGClipDataset(val_dirs,   val_labels,   args.clip_len, args.img_size)
-    test_ds  = PNGClipDataset(test_dirs,  test_labels,  args.clip_len, args.img_size)
+                               max_videos=args.max_train_videos,
+                               rppg_cache_dir=rppg_cache)
+    val_ds   = PNGClipDataset(val_dirs,   val_labels,   args.clip_len, args.img_size,
+                               rppg_cache_dir=rppg_cache)
+    test_ds  = PNGClipDataset(test_dirs,  test_labels,  args.clip_len, args.img_size,
+                               rppg_cache_dir=rppg_cache)
 
     # Balanced sampler — use actual dataset labels (may be capped)
     tl = np.array(train_ds.labels)
@@ -653,6 +661,8 @@ def parse_args():
                    choices=["cosine", "flat_then_cosine"])
     p.add_argument("--use_rppg_fusion", action="store_true", default=False,
                    help="Fuse pre-extracted rPPG features (rppg_feat.npy) into classifier")
+    p.add_argument("--rppg_cache", default=None,
+                   help="Path to rPPG cache dir (output of extract_rppg_png.py)")
     p.add_argument("--num_workers",            type=int,   default=2)
     p.add_argument("--seed",                   type=int,   default=42)
     p.add_argument("--fp16", action="store_true", default=True)
