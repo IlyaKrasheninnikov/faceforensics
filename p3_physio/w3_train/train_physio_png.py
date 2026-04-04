@@ -203,10 +203,17 @@ class PNGClipDataset(Dataset):
         clip = (clip - IMAGENET_MEAN) / IMAGENET_STD
         clip_tensor = torch.from_numpy(clip).permute(0, 3, 1, 2).float()  # (T, 3, H, W)
 
+        # Load pre-extracted rPPG feature if available
+        rppg_path = os.path.join(vdir, "rppg_feat.npy")
+        if os.path.exists(rppg_path):
+            rppg_feat = torch.from_numpy(np.load(rppg_path).astype(np.float32))
+        else:
+            rppg_feat = torch.zeros(128)
+
         return {
             "frames": clip_tensor,               # (T, 3, H, W)
             "label": torch.tensor(float(label), dtype=torch.float32),
-            "rppg_feat": torch.zeros(128),        # placeholder — no physio extraction yet
+            "rppg_feat": rppg_feat,              # (128,) — real FFT feature or zeros
             "blink_feat": torch.zeros(16),        # placeholder
         }
 
@@ -352,7 +359,7 @@ def train(args):
     print(f"Val: {len(val_ds)} | Test: {len(test_ds)}")
 
     # ─── Model ───────────────────────────────────────────────────────────
-    use_physio = (args.w_pulse > 0 or args.w_blink > 0)
+    use_physio = (args.w_pulse > 0 or args.w_blink > 0 or args.use_rppg_fusion)
     cfg = ModelConfig(
         backbone="efficientnet_b4",
         backbone_pretrained=(args.baseline_ckpt is None),  # only download if no ckpt
@@ -644,6 +651,8 @@ def parse_args():
     p.add_argument("--freeze_backbone_epochs", type=int,   default=3)
     p.add_argument("--lr_schedule", default="flat_then_cosine",
                    choices=["cosine", "flat_then_cosine"])
+    p.add_argument("--use_rppg_fusion", action="store_true", default=False,
+                   help="Fuse pre-extracted rPPG features (rppg_feat.npy) into classifier")
     p.add_argument("--num_workers",            type=int,   default=2)
     p.add_argument("--seed",                   type=int,   default=42)
     p.add_argument("--fp16", action="store_true", default=True)
