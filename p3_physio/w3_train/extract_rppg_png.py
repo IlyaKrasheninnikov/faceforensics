@@ -254,6 +254,7 @@ def process_video_folder(args_tuple) -> dict:
     except Exception as e:
         feat = np.zeros(RPPG_FEAT_DIM, dtype=np.float32)
         snr_db, bpm = -99.0, 0.0
+        return {"video": video_dir.name, "status": f"error: {type(e).__name__}: {e}"}
 
     np.save(feat_path, feat)
     with open(meta_path, "w") as f:
@@ -288,6 +289,7 @@ def main(args):
 
     start = time.time()
     n_ok = n_cached = n_err = 0
+    first_error = None
 
     if args.num_workers > 1:
         with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
@@ -301,6 +303,8 @@ def main(args):
                     n_cached += 1
                 else:
                     n_err += 1
+                    if first_error is None:
+                        first_error = r["status"]
                 pbar.set_postfix(ok=n_ok, cached=n_cached, err=n_err)
     else:
         for w in tqdm(work, desc="rPPG extract"):
@@ -311,9 +315,13 @@ def main(args):
                 n_cached += 1
             else:
                 n_err += 1
+                if first_error is None:
+                    first_error = r["status"]
 
     elapsed = time.time() - start
     print(f"\nDone: {n_ok} extracted, {n_cached} cached, {n_err} errors")
+    if first_error:
+        print(f"First error: {first_error}")
     print(f"Time: {elapsed / 60:.1f} min")
     print(f"Features saved to: {out_dir}/<manip>/<video_name>/rppg_feat.npy")
 
