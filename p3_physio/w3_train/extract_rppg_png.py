@@ -106,7 +106,13 @@ def chrom_method(rgb: np.ndarray, fps: float) -> np.ndarray:
     nyq = fps / 2.0
     if nyq <= 3.5:
         return (xs - ys)
-    b, a = scipy_signal.butter(4, [0.7 / nyq, 3.5 / nyq], btype="band")
+    # Use order=2 so padlen=9; skip filtering entirely if signal still too short
+    order = 2
+    b, a = scipy_signal.butter(order, [0.7 / nyq, 3.5 / nyq], btype="band")
+    padlen = 3 * order + 1  # scipy default: 3*(max(len(a),len(b))-1)
+    if len(xs) <= padlen:
+        alpha = xs.std() / (ys.std() + 1e-8)
+        return xs - alpha * ys
     xs_f = scipy_signal.filtfilt(b, a, xs)
     ys_f = scipy_signal.filtfilt(b, a, ys)
     alpha = xs_f.std() / (ys_f.std() + 1e-8)
