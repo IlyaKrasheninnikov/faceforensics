@@ -366,6 +366,24 @@ def train(args):
           f"{len(train_dl)} steps/epoch")
     print(f"Val: {len(val_ds)} | Test: {len(test_ds)}")
 
+    # ─── rPPG cache diagnostic ────────────────────────────────────────────
+    if rppg_cache:
+        n_with_feat = 0
+        feat_norms = []
+        for vdir in train_ds.video_dirs[:200]:  # sample first 200 train videos
+            vpath = Path(vdir)
+            cache_feat = Path(rppg_cache) / vpath.parent.name / vpath.name / "rppg_feat.npy"
+            if cache_feat.exists():
+                feat = np.load(str(cache_feat))
+                n_with_feat += 1
+                feat_norms.append(float(np.linalg.norm(feat)))
+        pct = 100 * n_with_feat / min(200, len(train_ds.video_dirs))
+        mean_norm = float(np.mean(feat_norms)) if feat_norms else 0.0
+        print(f"rPPG cache: {pct:.0f}% of sampled train videos have features "
+              f"(mean L2-norm={mean_norm:.3f}, expect ~1.0 if non-zero)")
+        if pct < 50:
+            print("  [WARN] Less than 50% of videos have rPPG features — cache path may be wrong")
+
     # ─── Model ───────────────────────────────────────────────────────────
     use_physio = (args.w_pulse > 0 or args.w_blink > 0 or args.use_rppg_fusion)
     cfg = ModelConfig(
