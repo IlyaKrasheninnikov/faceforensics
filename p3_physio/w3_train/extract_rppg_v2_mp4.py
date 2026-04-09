@@ -55,9 +55,17 @@ RPPG_V2_FEAT_DIM = 12  # total feature dimension
 # ─── Video loading ─────────────────────────────────────────────────────────
 
 def load_video_frames(video_path: str, max_frames: int = 300,
-                      target_fps: float = 25.0) -> tuple:
+                      target_fps: float = 25.0,
+                      max_height: int = 480) -> tuple:
     """
-    Load MP4 video, downsample to target_fps, return frames at native resolution.
+    Load MP4 video, downsample to target_fps, resize to max_height (480p).
+
+    Why 480p is enough:
+      - Native FF++ is 1080p → face ~400px wide → cheek ROI ~120px
+      - At 480p → face ~200px wide → cheek ROI ~60px
+      - Green channel mean over 60×50px region is very stable for rPPG
+      - Sync_rPPG paper used similar resolution with dlib landmarks → PCC=0.72
+      - Memory: 300 × 480 × 854 × 3 × 4 bytes ≈ 1.5 GB (vs ~7 GB at 1080p)
 
     Returns: (frames_array, actual_fps)
       frames_array: np.ndarray shape (T, H, W, 3) float32 [0,1] RGB
@@ -68,9 +76,21 @@ def load_video_frames(video_path: str, max_frames: int = 300,
         return None, 0.0
 
     orig_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    orig_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    orig_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+
     # Downsample: keep every step-th frame to approximate target_fps
     step = max(1, round(orig_fps / target_fps))
     actual_fps = orig_fps / step
+
+    # Resize to max_height preserving aspect ratio
+    need_resize = orig_h > max_height and orig_h > 0
+    if need_resize:
+        scale = max_height / orig_h
+        new_h = max_height
+        new_w = int(orig_w * scale)
+    else:
+        new_h, new_w = orig_h, orig_w
 
     frames = []
     idx = 0
@@ -79,7 +99,9 @@ def load_video_frames(video_path: str, max_frames: int = 300,
         if not ret:
             break
         if idx % step == 0:
-            # Keep NATIVE resolution — cheek ROIs need to be large
+            if need_resize:
+                frame = cv2.resize(frame, (new_w, new_h),
+                                   interpolation=cv2.INTER_AREA)
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             frames.append(frame_rgb.astype(np.float32) / 255.0)
         idx += 1
@@ -290,7 +312,7 @@ def process_video_mp4(args_tuple) -> dict:
     """
     Worker: load MP4 video, extract L/R cheek rPPG, compute sync features, save.
     """
-    video_path, out_dir, target_fps, max_frames, force_recompute = args_tuple
+    video_path, out_dir, target_fps, max_frames, max_height, force_recompute = args_tuple
     video_path = Path(video_path)
     out_dir = Path(out_dir)
 
@@ -309,9 +331,10 @@ def process_video_mp4(args_tuple) -> dict:
 
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # Load video frames at native resolution
+    # Load video frames at 480p (enough for ~60px cheek ROIs)
     frames_arr, actual_fps = load_video_frames(
-        str(video_path), max_frames=max_frames, target_fps=target_fps
+        str(video_path), max_frames=max_frames, target_fps=target_fps,
+        max_height=max_height
     )
 
     if frames_arr is None or len(frames_arr) < 8:
@@ -362,15 +385,19 @@ def _get_manip_type(video_path: Path) -> str:
 
 # ─── Discover videos ────────────────────────────────────────────────────────
 
-def find_all_videos(ff_root: Path) -> list:
+def find_all_videos(ff_root: Path, manip_filter: list = None) -> list:
     """
     Find all MP4 videos in the FF++ dataset. Supports multiple layouts:
       1. <root>/<manip>/c23/videos/*.mp4   (standard FF++ layout)
       2. <root>/<manip>/*.mp4              (flat layout)
       3. <root>/<manip>/videos/*.mp4       (alternative)
+
+    manip_filter: if set, only process these manipulation types
+                  e.g., ["original", "Deepfakes"]
     """
+    types_to_scan = manip_filter if manip_filter else FF_MANIPULATION_TYPES
     all_videos = []
-    for manip in FF_MANIPULATION_TYPES:
+    for manip in types_to_scan:
         manip_dir = ff_root / manip
         if not manip_dir.exists():
             print(f"  {manip}: NOT FOUND at {manip_dir}")
@@ -414,8 +441,14 @@ def main(args):
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # Parse --manips filter (e.g., "original,Deepfakes")
+    manip_filter = None
+    if args.manips:
+        manip_filter = [m.strip() for m in args.manips.split(",")]
+        print(f"Filtering to: {manip_filter}")
+
     print(f"Scanning for MP4 videos in: {ff_root}")
-    all_videos = find_all_videos(ff_root)
+    all_videos = find_all_videos(ff_root, manip_filter=manip_filter)
     print(f"\nTotal: {len(all_videos)} MP4 videos")
 
     if not all_videos:
@@ -431,7 +464,8 @@ def main(args):
     if len(all_videos) > 3:
         print(f"  ... ({len(all_videos) - 3} more)")
 
-    work = [(str(v), str(out_dir), args.target_fps, args.max_frames, args.force)
+    work = [(str(v), str(out_dir), args.target_fps, args.max_frames,
+             args.max_height, args.force)
             for v in all_videos]
 
     start = time.time()
@@ -507,15 +541,22 @@ def parse_args():
     p = argparse.ArgumentParser(
         description="V2 rPPG extraction from MP4 videos: L/R cheek sync features")
     p.add_argument("--ff_root", required=True,
-                   help="Root of FF++ MP4 dataset (e.g., /kaggle/input/ff-c23)")
+                   help="Root of FF++ MP4 dataset (e.g., /kaggle/input/ff-c23/FaceForensics++_C23)")
     p.add_argument("--out_dir", default="./rppg_v2_cache",
                    help="Output cache directory")
+    p.add_argument("--manips", type=str, default=None,
+                   help="Comma-separated manipulation types to process "
+                        "(e.g., 'original,Deepfakes'). Default: all 6 types. "
+                        "Use this to split work across 3 parallel Kaggle runs.")
     p.add_argument("--target_fps", type=float, default=25.0,
                    help="Downsample video to this FPS (default 25)")
     p.add_argument("--max_frames", type=int, default=300,
                    help="Max frames per video (default 300 = ~12s at 25fps)")
-    p.add_argument("--num_workers", type=int, default=4,
-                   help="Parallel workers for extraction")
+    p.add_argument("--max_height", type=int, default=480,
+                   help="Resize frames to this height (default 480). "
+                        "480p gives ~60px cheek ROIs — enough for clean rPPG.")
+    p.add_argument("--num_workers", type=int, default=2,
+                   help="Parallel workers (default 2 — safe for Kaggle 13GB RAM)")
     p.add_argument("--force", action="store_true",
                    help="Force recompute even if cache exists")
     return p.parse_args()
