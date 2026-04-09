@@ -74,6 +74,8 @@ class ModelConfig:
     # Ablation flags
     use_physio_fusion: bool = True     # False = ignore rPPG/blink in fusion (cls from temporal only)
     temporal_pool: str = "mean"        # "mean" = simple mean pool, "transformer" = full transformer
+    use_motion_model: bool = False     # True = add frame-diff motion branch
+    motion_dim: int = 64              # output dim of motion encoder
 
 
 # ─── Backbone ─────────────────────────────────────────────────────────────────
@@ -258,6 +260,49 @@ class BlinkSequenceHead(nn.Module):
         return self.net(x).squeeze(-1)   # (B, T)
 
 
+# ─── Motion Model ───────────────────────────────
+
+class MotionEncoder(nn.Module):
+    """
+    Lightweight CNN that processes frame differences I(t)-I(t-1).
+    Captures temporal inconsistencies in blood flow / color changes
+    that deepfakes fail to replicate.
+
+    Input: (B, T, 3, H, W) frame differences
+    Output: (B, motion_dim) motion summary feature
+    """
+
+    def __init__(self, motion_dim: int = 64):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(3, 32, 3, stride=2, padding=1),  # 224→112
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.Conv2d(32, 32, 3, stride=2, padding=1),  # 112→56
+            nn.BatchNorm2d(32),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool2d(1),                     # 56→1
+            nn.Flatten(),                                 # (B*T, 32)
+        )
+        self.temporal_pool = nn.Sequential(
+            nn.Linear(32, motion_dim),
+            nn.ReLU(),
+        )
+
+    def forward(self, frame_diffs: torch.Tensor) -> torch.Tensor:
+        """frame_diffs: (B, T, 3, H, W) → (B, motion_dim)"""
+        B, T, C, H, W = frame_diffs.shape
+        x = frame_diffs.reshape(B * T, C, H, W)
+        # Process in chunks to save memory
+        feats = []
+        for i in range(0, B * T, 8):
+            feats.append(self.conv(x[i:i+8]))
+        x = torch.cat(feats, dim=0)             # (B*T, 32)
+        x = x.view(B, T, -1)                    # (B, T, 32)
+        x = x.mean(dim=1)                       # (B, 32) — temporal mean pool
+        return self.temporal_pool(x)             # (B, motion_dim)
+
+
 # ─── PhysioNet Main Model ─────────────────────────────────────────────────────
 
 class PhysioNet(nn.Module):
@@ -304,11 +349,19 @@ class PhysioNet(nn.Module):
                 )
             temporal_out_dim = cfg.temporal_dim
 
-        # 3. Fusion: temporal CLS token + (optionally) explicit features
+        # 2b. Motion model (frame-difference branch)
+        if cfg.use_motion_model:
+            self.motion_encoder = MotionEncoder(cfg.motion_dim)
+
+        # 3. Fusion: temporal CLS token + (optionally) explicit features + motion
+        fusion_input_dim = temporal_out_dim
         if cfg.use_physio_fusion:
-            fusion_input_dim = temporal_out_dim + cfg.rppg_feature_dim + cfg.blink_feature_dim
-        else:
-            fusion_input_dim = temporal_out_dim
+            physio_dim = cfg.rppg_feature_dim + cfg.blink_feature_dim
+            # BatchNorm normalizes physio features (SNR, PCC, PSD have wildly different scales)
+            self.physio_bn = nn.BatchNorm1d(physio_dim)
+            fusion_input_dim += physio_dim
+        if cfg.use_motion_model:
+            fusion_input_dim += cfg.motion_dim
         self.fusion = nn.Sequential(
             nn.Linear(fusion_input_dim, cfg.fusion_dim),
             nn.GELU(),
@@ -348,6 +401,7 @@ class PhysioNet(nn.Module):
         frames: torch.Tensor,
         rppg_feat: Optional[torch.Tensor] = None,
         blink_feat: Optional[torch.Tensor] = None,
+        frame_diffs: Optional[torch.Tensor] = None,
     ) -> dict:
         B, T = frames.shape[:2]
         device = frames.device
@@ -375,14 +429,22 @@ class PhysioNet(nn.Module):
                 cls_token = temporal_out.mean(dim=1)       # (B, temporal_dim)
 
         # 3. Fusion
+        parts = [cls_token]
         if self.cfg.use_physio_fusion:
             if rppg_feat is None:
                 rppg_feat = torch.zeros(B, self.cfg.rppg_feature_dim, device=device)
             if blink_feat is None:
                 blink_feat = torch.zeros(B, self.cfg.blink_feature_dim, device=device)
-            fused = torch.cat([cls_token, rppg_feat, blink_feat], dim=-1)
-        else:
-            fused = cls_token
+            physio = torch.cat([rppg_feat, blink_feat], dim=-1)
+            physio = self.physio_bn(physio)  # normalize heterogeneous feature scales
+            parts.append(physio)
+        if self.cfg.use_motion_model and hasattr(self, 'motion_encoder'):
+            if frame_diffs is not None:
+                motion_feat = self.motion_encoder(frame_diffs)
+            else:
+                motion_feat = torch.zeros(B, self.cfg.motion_dim, device=device)
+            parts.append(motion_feat)
+        fused = torch.cat(parts, dim=-1)
 
         fused = self.fusion(fused)                         # (B, fusion_dim)
 
@@ -408,28 +470,45 @@ class PhysioNet(nn.Module):
 if __name__ == "__main__":
     import torch
 
+    # Test 1: Original config
     cfg = ModelConfig(
         backbone="efficientnet_b4",
-        backbone_pretrained=False,   # don't download weights during test
+        backbone_pretrained=False,
         temporal_model="transformer",
         clip_len=16,
         img_size=224,
     )
-
     model = PhysioNet(cfg)
     params = model.get_num_params()
     print(f"PhysioNet params: {params['total']/1e6:.1f}M total, {params['trainable']/1e6:.1f}M trainable")
 
-    # Dummy forward pass
     B, T = 2, 16
     frames = torch.randn(B, T, 3, 224, 224)
     rppg_feat = torch.randn(B, cfg.rppg_feature_dim)
     blink_feat = torch.randn(B, cfg.blink_feature_dim)
-
     with torch.no_grad():
         out = model(frames, rppg_feat, blink_feat)
+    print(f"logit: {out['logit'].shape}")
+    print("Test 1 (original) PASSED")
 
-    print(f"logit shape:       {out['logit'].shape}")
-    print(f"pulse_pred shape:  {out['pulse_pred'].shape}")
-    print(f"blink_pred shape:  {out['blink_pred'].shape}")
-    print("Smoke test PASSED")
+    # Test 2: V2 rPPG (12-d sync) + motion model
+    cfg2 = ModelConfig(
+        backbone="efficientnet_b4",
+        backbone_pretrained=False,
+        temporal_model="mean",
+        temporal_dim=0,
+        clip_len=16,
+        img_size=224,
+        rppg_feature_dim=12,
+        use_motion_model=True,
+        use_pulse_head=False,
+        use_blink_head=False,
+    )
+    model2 = PhysioNet(cfg2)
+    rppg2 = torch.randn(B, 12)
+    blink2 = torch.randn(B, 16)
+    diffs = torch.randn(B, T, 3, 224, 224)
+    with torch.no_grad():
+        out2 = model2(frames, rppg2, blink2, diffs)
+    print(f"logit: {out2['logit'].shape}")
+    print("Test 2 (v2 rPPG + motion) PASSED")
