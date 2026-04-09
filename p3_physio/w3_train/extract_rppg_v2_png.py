@@ -49,8 +49,9 @@ def _extract_lr_cheek_green(frames: np.ndarray) -> tuple:
     """
     Extract GREEN channel mean from LEFT and RIGHT cheek ROIs separately.
 
-    Uses OpenCV Haar cascade for face detection, then geometric cheek ROIs.
-    FF++ frames are already face-cropped at 224×224.
+    Uses Haar cascade on NATIVE resolution frames (1280×720 in FF++).
+    Detects face in first frame, then uses fixed ROI for temporal consistency.
+    Cheek ROIs at native resolution are ~100px wide → much cleaner signal.
 
     Returns: (left_green, right_green) each shape (T,) float32
     """
@@ -58,40 +59,46 @@ def _extract_lr_cheek_green(frames: np.ndarray) -> tuple:
     cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     detector = cv2.CascadeClassifier(cascade_path)
 
+    # Detect face on first few frames, pick the largest stable detection
+    face_box = None
+    for t in range(min(5, T)):
+        frame_uint8 = (frames[t] * 255).astype(np.uint8)
+        gray = cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2GRAY)
+        faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
+                                          minSize=(50, 50))
+        if len(faces) > 0:
+            face_box = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)[0]
+            break
+
+    if face_box is None:
+        # Fallback: assume face is centered (common for FF++ preprocessed frames)
+        cx, cy = W // 2, H // 4  # face typically in upper portion
+        fw, fh = int(W * 0.4), int(H * 0.5)
+        face_box = (cx - fw // 2, cy, fw, fh)
+
+    x, y, w, h = face_box
+
+    # Fixed cheek ROIs (consistent across all frames → clean temporal signal)
+    # Left cheek: left 30% of face, vertically at 40-65% of face height
+    lc_x1 = max(0, x + int(w * 0.05))
+    lc_x2 = max(lc_x1 + 5, x + int(w * 0.35))
+    lc_y1 = max(0, y + int(h * 0.40))
+    lc_y2 = max(lc_y1 + 5, y + int(h * 0.65))
+
+    # Right cheek: right 30% of face, vertically at 40-65% of face height
+    rc_x1 = max(0, x + int(w * 0.65))
+    rc_x2 = max(rc_x1 + 5, min(W, x + int(w * 0.95)))
+    rc_y1 = max(0, y + int(h * 0.40))
+    rc_y2 = max(rc_y1 + 5, y + int(h * 0.65))
+
     left_signal = np.zeros(T, dtype=np.float32)
     right_signal = np.zeros(T, dtype=np.float32)
-    last_box = None
 
     for t in range(T):
         frame = frames[t]
-        frame_uint8 = (frame * 255).astype(np.uint8)
-        gray = cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2GRAY)
-        faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
-                                          minSize=(30, 30))
-
-        if len(faces) > 0:
-            last_box = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)[0]
-        elif last_box is None:
-            # Fallback: centered 60% crop
-            cx, cy = W // 2, H // 2
-            fw, fh = int(W * 0.6), int(H * 0.6)
-            last_box = (cx - fw // 2, cy - fh // 2, fw, fh)
-
-        x, y, w, h = last_box
-
-        # Left cheek ROI (viewer's left = subject's right cheek)
-        lc_x1, lc_y1 = max(0, x), max(0, y + h * 2 // 5)
-        lc_x2, lc_y2 = min(W, x + w // 3), min(H, y + h * 2 // 5 + h // 4)
-
-        # Right cheek ROI (viewer's right = subject's left cheek)
-        rc_x1, rc_y1 = max(0, x + w * 2 // 3), max(0, y + h * 2 // 5)
-        rc_x2, rc_y2 = min(W, x + w), min(H, y + h * 2 // 5 + h // 4)
-
-        # Green channel mean (index 1 in RGB)
-        if lc_x2 > lc_x1 and lc_y2 > lc_y1:
-            left_signal[t] = frame[lc_y1:lc_y2, lc_x1:lc_x2, 1].mean()
-        if rc_x2 > rc_x1 and rc_y2 > rc_y1:
-            right_signal[t] = frame[rc_y1:rc_y2, rc_x1:rc_x2, 1].mean()
+        # Green channel mean over cheek ROI
+        left_signal[t] = frame[lc_y1:lc_y2, lc_x1:lc_x2, 1].mean()
+        right_signal[t] = frame[rc_y1:rc_y2, rc_x1:rc_x2, 1].mean()
 
     return left_signal, right_signal
 
@@ -126,13 +133,15 @@ def _detrend(signal: np.ndarray, fps: float) -> np.ndarray:
 
 def _bandpass_filter(signal: np.ndarray, fps: float,
                      low_hz: float = 0.7, high_hz: float = 3.5) -> np.ndarray:
-    """Butterworth bandpass filter for heart rate range (42-210 BPM)."""
+    """Butterworth bandpass filter for heart rate range (42-210 BPM).
+    For very short signals (<30 frames), use order=1 to minimize padlen requirement."""
     nyq = fps / 2.0
-    if nyq <= high_hz or len(signal) < 10:
+    if nyq <= high_hz or len(signal) < 8:
         return signal
-    order = 2
+    # Use order=1 for short signals (padlen=4), order=2 for longer ones (padlen=9)
+    order = 1 if len(signal) < 30 else 2
     b, a = scipy_signal.butter(order, [low_hz / nyq, high_hz / nyq], btype='band')
-    padlen = 3 * order + 1
+    padlen = 3 * (max(len(a), len(b)) - 1)
     if len(signal) <= padlen:
         return signal
     return scipy_signal.filtfilt(b, a, signal).astype(np.float32)
@@ -182,37 +191,43 @@ def compute_sync_features(left_raw: np.ndarray, right_raw: np.ndarray,
     left_f = _bandpass_filter(left_dt, fps)
     right_f = _bandpass_filter(right_dt, fps)
 
-    # Step 3: Per-cheek metrics
+    # Step 3: Per-cheek metrics (on filtered signals)
     left_snr = _compute_snr(left_f, fps)
     right_snr = _compute_snr(right_f, fps)
     left_psd = _compute_psd_mean(left_f, fps)
     right_psd = _compute_psd_mean(right_f, fps)
-    left_mad = float(np.mean(np.abs(left_f - left_f.mean())))
-    right_mad = float(np.mean(np.abs(right_f - right_f.mean())))
     left_sd = float(left_f.std())
     right_sd = float(right_f.std())
 
-    # Step 4: Cross-cheek synchronization metrics (THE KEY FEATURES)
-    # PCC — Pearson Correlation Coefficient
-    if left_f.std() > 1e-8 and right_f.std() > 1e-8:
-        pcc = float(np.corrcoef(left_f, right_f)[0, 1])
-    else:
-        pcc = 0.0
-    if np.isnan(pcc):
-        pcc = 0.0
+    # Step 4: Cross-cheek synchronization — compute on BOTH raw (detrended)
+    # and filtered signals, take the more informative one.
+    # For 24-frame signals, raw PCC is more reliable than filtered PCC.
 
-    # Max cross-correlation (normalized)
+    # PCC on detrended (not filtered) signal — works even with 24 frames
+    pcc_raw = 0.0
+    if left_dt.std() > 1e-8 and right_dt.std() > 1e-8:
+        pcc_raw = float(np.corrcoef(left_dt, right_dt)[0, 1])
+    if np.isnan(pcc_raw):
+        pcc_raw = 0.0
+
+    # PCC on filtered signal
+    pcc_filt = 0.0
     if left_f.std() > 1e-8 and right_f.std() > 1e-8:
-        left_norm = (left_f - left_f.mean()) / (left_f.std() * len(left_f))
-        right_norm = (right_f - right_f.mean()) / right_f.std()
+        pcc_filt = float(np.corrcoef(left_f, right_f)[0, 1])
+    if np.isnan(pcc_filt):
+        pcc_filt = 0.0
+
+    # Max cross-correlation (on detrended — more robust for short signals)
+    max_xcorr = 0.0
+    if left_dt.std() > 1e-8 and right_dt.std() > 1e-8:
+        left_norm = (left_dt - left_dt.mean()) / (left_dt.std() * len(left_dt))
+        right_norm = (right_dt - right_dt.mean()) / right_dt.std()
         xcorr = np.correlate(left_norm, right_norm, mode='full')
         max_xcorr = float(xcorr.max())
-    else:
-        max_xcorr = 0.0
     if np.isnan(max_xcorr):
         max_xcorr = 0.0
 
-    # Asymmetry features (explicit)
+    # Asymmetry features
     snr_diff = abs(left_snr - right_snr)
     sd_ratio = min(left_sd, right_sd) / (max(left_sd, right_sd) + 1e-8)
 
@@ -220,10 +235,11 @@ def compute_sync_features(left_raw: np.ndarray, right_raw: np.ndarray,
     feat = np.array([
         left_snr, right_snr, snr_diff,       # 0-2: per-cheek SNR + asymmetry
         left_sd, right_sd, sd_ratio,          # 3-5: per-cheek SD + ratio
-        left_mad, right_mad,                  # 6-7: per-cheek MAD
-        left_psd, right_psd,                  # 8-9: per-cheek PSD
-        pcc,                                  # 10: Pearson correlation (KEY!)
-        max_xcorr,                            # 11: max cross-correlation
+        pcc_raw,                              # 6: PCC on detrended signal (KEY!)
+        pcc_filt,                             # 7: PCC on filtered signal
+        max_xcorr,                            # 8: max cross-correlation
+        left_psd, right_psd,                  # 9-10: per-cheek PSD
+        abs(pcc_raw - pcc_filt),              # 11: PCC consistency (real should be stable)
     ], dtype=np.float32)
 
     # Replace any NaN/inf
@@ -232,9 +248,10 @@ def compute_sync_features(left_raw: np.ndarray, right_raw: np.ndarray,
     meta = {
         "left_snr": left_snr, "right_snr": right_snr, "snr_diff": snr_diff,
         "left_sd": left_sd, "right_sd": right_sd, "sd_ratio": sd_ratio,
-        "left_mad": left_mad, "right_mad": right_mad,
+        "pcc_raw": pcc_raw, "pcc_filt": pcc_filt,
+        "max_xcorr": max_xcorr,
         "left_psd": left_psd, "right_psd": right_psd,
-        "pcc": pcc, "max_xcorr": max_xcorr,
+        "pcc": pcc_raw,  # backward compat: "pcc" key used by diagnostic scripts
     }
 
     return feat, meta
@@ -276,10 +293,11 @@ def process_video_folder(args_tuple) -> dict:
         if img is None:
             continue
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = cv2.resize(img, (224, 224))
+        # Keep NATIVE resolution for rPPG — cheek ROIs need to be large
+        # enough (100+ px) for clean green channel signal
         frames.append(img.astype(np.float32) / 255.0)
 
-    if len(frames) < 16:
+    if len(frames) < 8:
         np.save(feat_path, np.zeros(RPPG_V2_FEAT_DIM, dtype=np.float32))
         with open(meta_path, "w") as f:
             json.dump({"status": "too_few_frames", "n_frames": len(frames)}, f)
