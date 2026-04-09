@@ -100,9 +100,27 @@ def _extract_lr_cheek_green(frames: np.ndarray) -> tuple:
 
 def _detrend(signal: np.ndarray, fps: float) -> np.ndarray:
     """Remove low-frequency drift using moving average subtraction."""
-    win = max(2, int(fps))  # 1-second window
+    if len(signal) < 3:
+        return signal
+    
+    win = max(2, min(int(fps), len(signal) // 2))  # Ensure window isn't too large
+    if win >= len(signal):
+        win = max(2, len(signal) // 3)
+    
     kernel = np.ones(win) / win
+    
+    # Use 'same' mode but ensure output length matches input
     trend = np.convolve(signal, kernel, mode='same')
+    
+    # Ensure shapes match (convolve with 'same' can sometimes produce off-by-one)
+    if len(trend) != len(signal):
+        # Trim or pad to match input length
+        if len(trend) > len(signal):
+            trend = trend[:len(signal)]
+        else:
+            # Pad with edge values if needed (shouldn't happen with 'same')
+            trend = np.pad(trend, (0, len(signal) - len(trend)), 'edge')
+    
     return signal - trend
 
 
