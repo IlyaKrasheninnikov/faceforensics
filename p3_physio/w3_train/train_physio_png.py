@@ -402,8 +402,21 @@ def train(args):
     )
     model = PhysioNet(cfg).to(device)
 
-    # Load pretrained baseline backbone
-    if args.baseline_ckpt and Path(args.baseline_ckpt).exists():
+    # Load full PhysioNet checkpoint (resume_ckpt takes priority over baseline_ckpt)
+    if args.resume_ckpt and Path(args.resume_ckpt).exists():
+        print(f"\nResuming from PhysioNet checkpoint: {args.resume_ckpt}")
+        ckpt = torch.load(args.resume_ckpt, map_location=device, weights_only=False)
+        state = ckpt.get("model_state_dict", ckpt)
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        print(f"  Loaded {len(state)} tensors")
+        if missing:
+            print(f"  Missing keys ({len(missing)}): {missing[:5]}{'...' if len(missing) > 5 else ''}")
+        if unexpected:
+            print(f"  Unexpected keys ({len(unexpected)}): {unexpected[:5]}{'...' if len(unexpected) > 5 else ''}")
+        prev_auc = ckpt.get("val_auc", 0.0)
+        print(f"  Previous checkpoint val_auc={prev_auc:.4f} (epoch {ckpt.get('epoch', '?')})")
+    # Load pretrained baseline backbone (only backbone weights from SimpleClassifier)
+    elif args.baseline_ckpt and Path(args.baseline_ckpt).exists():
         print(f"\nLoading baseline backbone from: {args.baseline_ckpt}")
         load_baseline_backbone(model, args.baseline_ckpt, device)
     else:
@@ -645,7 +658,9 @@ def parse_args():
     p.add_argument("--ff_root", required=True,
                    help="Path to FaceForensics++_c23_processed")
     p.add_argument("--baseline_ckpt", default=None,
-                   help="Path to baseline_best.pt to init backbone weights")
+                   help="Path to baseline_best.pt to init backbone weights only")
+    p.add_argument("--resume_ckpt", default=None,
+                   help="Path to a previous PhysioNet checkpoint to resume all weights from")
     p.add_argument("--out_dir",  default="./checkpoints")
     p.add_argument("--log_dir",  default="./logs")
     p.add_argument("--run_name", default="physio_png_v1")
