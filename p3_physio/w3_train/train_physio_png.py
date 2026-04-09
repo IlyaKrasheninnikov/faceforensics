@@ -126,6 +126,8 @@ class PNGClipDataset(Dataset):
         clips_per_video: int = 1,
         max_videos: Optional[int] = None,
         rppg_cache_dir: Optional[str] = None,
+        rppg_dim: int = 128,
+        rppg_version: int = 1,
     ):
         if max_videos is not None and max_videos < len(video_dirs):
             # Stratified cap: keep proportional real/fake ratio
@@ -141,6 +143,8 @@ class PNGClipDataset(Dataset):
         self.augment = augment
         self.clips_per_video = clips_per_video
         self.rppg_cache_dir = Path(rppg_cache_dir) if rppg_cache_dir else None
+        self.rppg_dim = rppg_dim
+        self.rppg_version = rppg_version  # 1 = v1 (128-d FFT), 2 = v2 (12-d sync)
 
         # Pre-scan frame lists
         self.frame_lists: List[List[str]] = []
@@ -206,18 +210,30 @@ class PNGClipDataset(Dataset):
         clip_tensor = torch.from_numpy(clip).permute(0, 3, 1, 2).float()  # (T, 3, H, W)
 
         # Load pre-extracted rPPG feature from cache dir if available
-        # Cache mirrors source structure: cache_dir/<manip>/<video_name>/rppg_feat.npy
-        rppg_feat = torch.zeros(128)
+        # v1: cache_dir/<manip>/<video_name>/rppg_feat.npy     (128-d FFT)
+        # v2: cache_dir/<manip>/<video_name>/rppg_v2_feat.npy  (12-d sync features)
+        rppg_feat = torch.zeros(self.rppg_dim)
         if self.rppg_cache_dir is not None:
             vpath = Path(vdir)
-            cache_feat = self.rppg_cache_dir / vpath.parent.name / vpath.name / "rppg_feat.npy"
+            if self.rppg_version == 2:
+                cache_feat = self.rppg_cache_dir / vpath.parent.name / vpath.name / "rppg_v2_feat.npy"
+            else:
+                cache_feat = self.rppg_cache_dir / vpath.parent.name / vpath.name / "rppg_feat.npy"
             if cache_feat.exists():
-                rppg_feat = torch.from_numpy(np.load(str(cache_feat)).astype(np.float32))
+                loaded = np.load(str(cache_feat)).astype(np.float32)
+                if len(loaded) == self.rppg_dim:
+                    rppg_feat = torch.from_numpy(loaded)
+
+        # Frame differences: I(t) - I(t-1) — captures temporal motion artifacts
+        frame_diffs = clip_tensor[1:] - clip_tensor[:-1]     # (T-1, 3, H, W)
+        # Pad to length T by repeating last diff
+        frame_diffs = torch.cat([frame_diffs, frame_diffs[-1:]], dim=0)  # (T, 3, H, W)
 
         return {
             "frames": clip_tensor,               # (T, 3, H, W)
+            "frame_diffs": frame_diffs,           # (T, 3, H, W) — temporal motion
             "label": torch.tensor(float(label), dtype=torch.float32),
-            "rppg_feat": rppg_feat,              # (128,) — real FFT feature or zeros
+            "rppg_feat": rppg_feat,              # (rppg_dim,) — sync features or zeros
             "blink_feat": torch.zeros(16),        # placeholder
         }
 
@@ -338,14 +354,19 @@ def train(args):
     print(f"Split: {n_train_ids}/{n_val_ids}/{n_ids-n_train_ids-n_val_ids} source IDs")
 
     rppg_cache = args.rppg_cache if hasattr(args, "rppg_cache") else None
+    rppg_dim = args.rppg_dim if hasattr(args, "rppg_dim") else 128
+    rppg_ver = args.rppg_version if hasattr(args, "rppg_version") else 1
     train_ds = PNGClipDataset(train_dirs, train_labels, args.clip_len, args.img_size,
                                augment=True, clips_per_video=args.clips_per_video,
                                max_videos=args.max_train_videos,
-                               rppg_cache_dir=rppg_cache)
+                               rppg_cache_dir=rppg_cache,
+                               rppg_dim=rppg_dim, rppg_version=rppg_ver)
     val_ds   = PNGClipDataset(val_dirs,   val_labels,   args.clip_len, args.img_size,
-                               rppg_cache_dir=rppg_cache)
+                               rppg_cache_dir=rppg_cache,
+                               rppg_dim=rppg_dim, rppg_version=rppg_ver)
     test_ds  = PNGClipDataset(test_dirs,  test_labels,  args.clip_len, args.img_size,
-                               rppg_cache_dir=rppg_cache)
+                               rppg_cache_dir=rppg_cache,
+                               rppg_dim=rppg_dim, rppg_version=rppg_ver)
 
     # Balanced sampler — use actual dataset labels (may be capped)
     tl = np.array(train_ds.labels)
@@ -368,27 +389,35 @@ def train(args):
 
     # ─── rPPG cache diagnostic ────────────────────────────────────────────
     if rppg_cache:
+        feat_file = "rppg_v2_feat.npy" if rppg_ver == 2 else "rppg_feat.npy"
         n_with_feat = 0
         feat_norms = []
+        pcc_values = []
         for vdir in train_ds.video_dirs[:200]:  # sample first 200 train videos
             vpath = Path(vdir)
-            cache_feat = Path(rppg_cache) / vpath.parent.name / vpath.name / "rppg_feat.npy"
+            cache_feat = Path(rppg_cache) / vpath.parent.name / vpath.name / feat_file
             if cache_feat.exists():
                 feat = np.load(str(cache_feat))
-                n_with_feat += 1
-                feat_norms.append(float(np.linalg.norm(feat)))
+                if len(feat) == rppg_dim:
+                    n_with_feat += 1
+                    feat_norms.append(float(np.linalg.norm(feat)))
+                    if rppg_ver == 2 and len(feat) >= 11:
+                        pcc_values.append(float(feat[10]))  # PCC is index 10
         pct = 100 * n_with_feat / min(200, len(train_ds.video_dirs))
         mean_norm = float(np.mean(feat_norms)) if feat_norms else 0.0
-        print(f"rPPG cache: {pct:.0f}% of sampled train videos have features "
-              f"(mean L2-norm={mean_norm:.3f}, expect ~1.0 if non-zero)")
+        print(f"rPPG v{rppg_ver} cache: {pct:.0f}% of sampled train videos have features "
+              f"(mean L2-norm={mean_norm:.3f})")
+        if rppg_ver == 2 and pcc_values:
+            print(f"  Mean PCC (train sample): {np.mean(pcc_values):.3f} ± {np.std(pcc_values):.3f}")
         if pct < 50:
             print("  [WARN] Less than 50% of videos have rPPG features — cache path may be wrong")
 
     # ─── Model ───────────────────────────────────────────────────────────
     use_physio = (args.w_pulse > 0 or args.w_blink > 0 or args.use_rppg_fusion)
+    use_motion = getattr(args, 'use_motion', False)
     cfg = ModelConfig(
         backbone="efficientnet_b4",
-        backbone_pretrained=(args.baseline_ckpt is None),  # only download if no ckpt
+        backbone_pretrained=(args.baseline_ckpt is None and not (hasattr(args, 'resume_ckpt') and args.resume_ckpt)),
         temporal_model=args.temporal_model,
         temporal_layers=args.temporal_layers,
         temporal_dim=args.temporal_dim,
@@ -399,6 +428,8 @@ def train(args):
         use_blink_head=(args.w_blink > 0),
         use_physio_fusion=use_physio,
         temporal_pool="transformer" if args.temporal_model != "mean" else "mean",
+        rppg_feature_dim=rppg_dim,
+        use_motion_model=use_motion,
     )
     model = PhysioNet(cfg).to(device)
 
@@ -503,14 +534,16 @@ def train(args):
         for batch in pbar:
             frames   = batch["frames"].to(device, non_blocking=True)       # (B, T, 3, H, W)
             labels_b = batch["label"].to(device, non_blocking=True)
-            rppg     = batch["rppg_feat"].to(device, non_blocking=True)    # (B, 128) zeros for now
-            blink    = batch["blink_feat"].to(device, non_blocking=True)   # (B, 16) zeros for now
+            rppg     = batch["rppg_feat"].to(device, non_blocking=True)    # (B, rppg_dim)
+            blink    = batch["blink_feat"].to(device, non_blocking=True)   # (B, 16)
+            diffs    = batch["frame_diffs"].to(device, non_blocking=True) if use_motion else None
 
             optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast("cuda", enabled=(scaler is not None)):
                 outputs = model(frames, rppg if use_physio else None,
-                                        blink if use_physio else None)
+                                        blink if use_physio else None,
+                                        diffs)
                 logits = outputs["logit"]
                 loss = criterion(logits, labels_b)
 
@@ -554,9 +587,11 @@ def train(args):
                 frames   = batch["frames"].to(device, non_blocking=True)
                 rppg     = batch["rppg_feat"].to(device, non_blocking=True)
                 blink    = batch["blink_feat"].to(device, non_blocking=True)
+                diffs    = batch["frame_diffs"].to(device, non_blocking=True) if use_motion else None
                 with torch.amp.autocast("cuda", enabled=(scaler is not None)):
                     outputs = model(frames, rppg if use_physio else None,
-                                            blink if use_physio else None)
+                                            blink if use_physio else None,
+                                            diffs)
                 probs = torch.sigmoid(outputs["logit"].float().clamp(-20, 20)).cpu().numpy()
                 probs = np.nan_to_num(probs, nan=0.5)
                 val_preds.extend(probs.tolist())
@@ -623,8 +658,13 @@ def train(args):
     with torch.no_grad():
         for batch in tqdm(test_dl, desc="Test", leave=False):
             frames = batch["frames"].to(device, non_blocking=True)
+            rppg   = batch["rppg_feat"].to(device, non_blocking=True)
+            blink  = batch["blink_feat"].to(device, non_blocking=True)
+            diffs  = batch["frame_diffs"].to(device, non_blocking=True) if use_motion else None
             with torch.amp.autocast("cuda", enabled=(scaler is not None)):
-                outputs = model(frames)
+                outputs = model(frames, rppg if use_physio else None,
+                                        blink if use_physio else None,
+                                        diffs)
             probs = torch.sigmoid(outputs["logit"].float().clamp(-20, 20)).cpu().numpy()
             probs = np.nan_to_num(probs, nan=0.5)
             test_preds.extend(probs.tolist())
@@ -693,9 +733,15 @@ def parse_args():
     p.add_argument("--lr_schedule", default="flat_then_cosine",
                    choices=["cosine", "flat_then_cosine"])
     p.add_argument("--use_rppg_fusion", action="store_true", default=False,
-                   help="Fuse pre-extracted rPPG features (rppg_feat.npy) into classifier")
+                   help="Fuse pre-extracted rPPG features into classifier")
     p.add_argument("--rppg_cache", default=None,
-                   help="Path to rPPG cache dir (output of extract_rppg_png.py)")
+                   help="Path to rPPG cache dir (output of extract_rppg_png.py or v2)")
+    p.add_argument("--rppg_dim", type=int, default=128,
+                   help="rPPG feature dimension: 128 for v1 (FFT), 12 for v2 (sync)")
+    p.add_argument("--rppg_version", type=int, default=1, choices=[1, 2],
+                   help="rPPG version: 1=128-d FFT (old), 2=12-d L/R cheek sync (new)")
+    p.add_argument("--use_motion", action="store_true", default=False,
+                   help="Add frame-difference motion branch")
     p.add_argument("--num_workers",            type=int,   default=2)
     p.add_argument("--seed",                   type=int,   default=42)
     p.add_argument("--fp16", action="store_true", default=True)
