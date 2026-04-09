@@ -113,60 +113,188 @@ def load_video_frames(video_path: str, max_frames: int = 300,
     return np.stack(frames, axis=0), actual_fps
 
 
-# ─── Face ROI: separate left/right cheek green channel signals ──────────────
+# ─── MediaPipe FaceMesh landmark-based cheek ROIs ──────────────────────────
+#
+# Why landmarks matter: Haar cascade gives a rough bounding box, and
+# percentage-based cheek ROIs from that box overlap or include non-cheek
+# skin → both sides sample similar tissue → PCC is high for BOTH real & fake.
+#
+# MediaPipe FaceMesh gives 468 precise anatomical landmarks. We use them to
+# define cheek polygons that are truly spatially separated (different vascular
+# territories), which is what makes PCC discriminative.
+#
+# Left cheek polygon (viewer's left = subject's right):
+#   landmarks 50, 101, 118, 117, 116, 123, 147, 213, 192, 187, 205, 36
+# Right cheek polygon (viewer's right = subject's left):
+#   landmarks 280, 330, 347, 346, 345, 352, 376, 433, 416, 411, 425, 266
+
+LEFT_CHEEK_IDS  = [50, 101, 118, 117, 116, 123, 147, 213, 192, 187, 205, 36]
+RIGHT_CHEEK_IDS = [280, 330, 347, 346, 345, 352, 376, 433, 416, 411, 425, 266]
+
+# Smaller fallback: just the core cheek triangle (fewer landmarks, still separate)
+LEFT_CHEEK_SMALL  = [50, 117, 187, 205, 36]
+RIGHT_CHEEK_SMALL = [280, 346, 411, 425, 266]
+
+
+_MP_CACHE = {"type": None, "obj": None, "initialized": False}
+
+
+def _init_mediapipe():
+    """Initialize MediaPipe FaceMesh. Cached per-process (only runs once per worker)."""
+    if _MP_CACHE["initialized"]:
+        return (_MP_CACHE["type"], _MP_CACHE["obj"])
+    _MP_CACHE["initialized"] = True
+    # Try legacy solutions API
+    try:
+        import mediapipe as mp
+        fm = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=1,
+            refine_landmarks=False,
+            min_detection_confidence=0.5,
+        )
+        _MP_CACHE["type"], _MP_CACHE["obj"] = "legacy", fm
+        return ("legacy", fm)
+    except Exception:
+        pass
+
+    # Try Tasks API (Kaggle/Colab)
+    try:
+        import mediapipe as mp
+        from mediapipe.tasks import python as mp_python
+        from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions, RunningMode
+        import urllib.request, tempfile
+
+        model_path = os.path.join(tempfile.gettempdir(), "face_landmarker.task")
+        if not os.path.exists(model_path):
+            urllib.request.urlretrieve(
+                "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+                model_path,
+            )
+        base_opts = mp_python.BaseOptions(model_asset_path=model_path)
+        opts = FaceLandmarkerOptions(
+            base_options=base_opts,
+            running_mode=RunningMode.IMAGE,
+            num_faces=1,
+            min_face_detection_confidence=0.5,
+        )
+        landmarker = FaceLandmarker.create_from_options(opts)
+        _MP_CACHE["type"], _MP_CACHE["obj"] = "tasks", landmarker
+        return ("tasks", landmarker)
+    except Exception:
+        pass
+
+    _MP_CACHE["type"], _MP_CACHE["obj"] = "none", None
+    return ("none", None)
+
+
+def _get_landmarks(backend_type, backend_obj, frame_uint8_rgb, H, W):
+    """Get 468 landmarks as list of (x_px, y_px) from a single frame."""
+    if backend_type == "legacy":
+        results = backend_obj.process(frame_uint8_rgb)
+        if not results.multi_face_landmarks:
+            return None
+        lm = results.multi_face_landmarks[0].landmark
+        return [(l.x * W, l.y * H) for l in lm]
+
+    elif backend_type == "tasks":
+        import mediapipe as mp
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame_uint8_rgb)
+        results = backend_obj.detect(mp_image)
+        if not results.face_landmarks:
+            return None
+        lm = results.face_landmarks[0]
+        return [(l.x * W, l.y * H) for l in lm]
+
+    return None
+
+
+def _polygon_mask(pts, H, W):
+    """Create binary mask from polygon points."""
+    pts_int = np.array(pts, dtype=np.int32).reshape((-1, 1, 2))
+    mask = np.zeros((H, W), dtype=np.uint8)
+    cv2.fillConvexPoly(mask, pts_int, 1)
+    return mask.astype(bool)
+
 
 def _extract_lr_cheek_green(frames: np.ndarray) -> tuple:
     """
     Extract GREEN channel mean from LEFT and RIGHT cheek ROIs separately.
 
-    Uses Haar cascade on native resolution frames.
-    Detects face in first 5 frames, uses fixed ROI for temporal consistency.
+    Uses MediaPipe FaceMesh landmarks to define precise cheek polygons.
+    Detects landmarks on first frame with a face, uses fixed mask for all frames
+    (temporal consistency — no per-frame jitter).
+
+    Fallback: Haar cascade + percentage ROIs if MediaPipe unavailable.
 
     Returns: (left_green, right_green) each shape (T,) float32
     """
     T, H, W, _ = frames.shape
-    cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-    detector = cv2.CascadeClassifier(cascade_path)
 
-    # Detect face on first few frames, pick the largest stable detection
-    face_box = None
-    for t in range(min(5, T)):
-        frame_uint8 = (frames[t] * 255).astype(np.uint8)
-        gray = cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2GRAY)
-        faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
-                                          minSize=(50, 50))
-        if len(faces) > 0:
-            face_box = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)[0]
-            break
+    # Try MediaPipe landmark-based ROIs
+    backend_type, backend_obj = _init_mediapipe()
 
-    if face_box is None:
-        # Fallback: assume face is centered
-        cx, cy = W // 2, H // 4
-        fw, fh = int(W * 0.4), int(H * 0.5)
-        face_box = (cx - fw // 2, cy, fw, fh)
+    left_mask = right_mask = None
+    if backend_type != "none":
+        # Find landmarks on first few frames (pick first success)
+        for t in range(min(5, T)):
+            frame_uint8 = (frames[t] * 255).astype(np.uint8)
+            landmarks = _get_landmarks(backend_type, backend_obj, frame_uint8, H, W)
+            if landmarks and len(landmarks) >= 468:
+                lc_pts = [(int(landmarks[i][0]), int(landmarks[i][1]))
+                          for i in LEFT_CHEEK_IDS]
+                rc_pts = [(int(landmarks[i][0]), int(landmarks[i][1]))
+                          for i in RIGHT_CHEEK_IDS]
+                left_mask = _polygon_mask(lc_pts, H, W)
+                right_mask = _polygon_mask(rc_pts, H, W)
 
-    x, y, w, h = face_box
+                # Sanity: masks should have reasonable area (>100 pixels)
+                if left_mask.sum() < 100 or right_mask.sum() < 100:
+                    left_mask = right_mask = None
+                    continue
+                break
 
-    # Fixed cheek ROIs (consistent across all frames → clean temporal signal)
-    # Left cheek: left 30% of face, vertically at 40-65% of face height
-    lc_x1 = max(0, x + int(w * 0.05))
-    lc_x2 = max(lc_x1 + 5, x + int(w * 0.35))
-    lc_y1 = max(0, y + int(h * 0.40))
-    lc_y2 = max(lc_y1 + 5, y + int(h * 0.65))
+        # Don't close — backend is cached per-process for reuse
 
-    # Right cheek: right 30% of face, vertically at 40-65% of face height
-    rc_x1 = max(0, x + int(w * 0.65))
-    rc_x2 = max(rc_x1 + 5, min(W, x + int(w * 0.95)))
-    rc_y1 = max(0, y + int(h * 0.40))
-    rc_y2 = max(rc_y1 + 5, y + int(h * 0.65))
+    # Fallback: Haar cascade + percentage ROIs
+    if left_mask is None or right_mask is None:
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        detector = cv2.CascadeClassifier(cascade_path)
+
+        face_box = None
+        for t in range(min(5, T)):
+            frame_uint8 = (frames[t] * 255).astype(np.uint8)
+            gray = cv2.cvtColor(frame_uint8, cv2.COLOR_RGB2GRAY)
+            faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5,
+                                              minSize=(50, 50))
+            if len(faces) > 0:
+                face_box = sorted(faces, key=lambda f: f[2] * f[3], reverse=True)[0]
+                break
+
+        if face_box is None:
+            cx, cy = W // 2, H // 4
+            fw, fh = int(W * 0.4), int(H * 0.5)
+            face_box = (cx - fw // 2, cy, fw, fh)
+
+        x, y, w, h = face_box
+        # Narrower ROIs than before — avoid center overlap
+        lc_x1, lc_x2 = max(0, x + int(w * 0.03)), x + int(w * 0.28)
+        lc_y1, lc_y2 = y + int(h * 0.45), y + int(h * 0.65)
+        rc_x1, rc_x2 = x + int(w * 0.72), min(W, x + int(w * 0.97))
+        rc_y1, rc_y2 = y + int(h * 0.45), y + int(h * 0.65)
+
+        left_mask = np.zeros((H, W), dtype=bool)
+        left_mask[max(0,lc_y1):min(H,lc_y2), max(0,lc_x1):min(W,lc_x2)] = True
+        right_mask = np.zeros((H, W), dtype=bool)
+        right_mask[max(0,rc_y1):min(H,rc_y2), max(0,rc_x1):min(W,rc_x2)] = True
 
     left_signal = np.zeros(T, dtype=np.float32)
     right_signal = np.zeros(T, dtype=np.float32)
 
     for t in range(T):
-        frame = frames[t]
-        left_signal[t] = frame[lc_y1:lc_y2, lc_x1:lc_x2, 1].mean()
-        right_signal[t] = frame[rc_y1:rc_y2, rc_x1:rc_x2, 1].mean()
+        green = frames[t, :, :, 1]  # green channel
+        left_signal[t] = green[left_mask].mean()
+        right_signal[t] = green[right_mask].mean()
 
     return left_signal, right_signal
 
@@ -555,8 +683,9 @@ def parse_args():
     p.add_argument("--max_height", type=int, default=480,
                    help="Resize frames to this height (default 480). "
                         "480p gives ~60px cheek ROIs — enough for clean rPPG.")
-    p.add_argument("--num_workers", type=int, default=2,
-                   help="Parallel workers (default 2 — safe for Kaggle 13GB RAM)")
+    p.add_argument("--num_workers", type=int, default=1,
+                   help="Parallel workers (default 1 — MediaPipe is not fork-safe. "
+                        "Use 1 for landmark mode. 2+ is OK if you add --no_landmarks)")
     p.add_argument("--force", action="store_true",
                    help="Force recompute even if cache exists")
     return p.parse_args()
