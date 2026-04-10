@@ -128,6 +128,7 @@ class PNGClipDataset(Dataset):
         rppg_cache_dir: Optional[str] = None,
         rppg_dim: int = 128,
         rppg_version: int = 1,
+        blink_cache_dir: Optional[str] = None,
     ):
         if max_videos is not None and max_videos < len(video_dirs):
             # Stratified cap: keep proportional real/fake ratio
@@ -145,6 +146,7 @@ class PNGClipDataset(Dataset):
         self.rppg_cache_dir = Path(rppg_cache_dir) if rppg_cache_dir else None
         self.rppg_dim = rppg_dim
         self.rppg_version = rppg_version  # 1 = v1 (128-d FFT), 2 = v2 (12-d sync)
+        self.blink_cache_dir = Path(blink_cache_dir) if blink_cache_dir else None
 
         # Pre-scan frame lists
         self.frame_lists: List[List[str]] = []
@@ -204,6 +206,21 @@ class PNGClipDataset(Dataset):
             if random.random() > 0.5:
                 factor = random.uniform(0.85, 1.15)
                 clip = np.clip(clip * factor, 0, 1).astype(np.float32)
+            # Color jitter — per-channel slight shift (temporal consistent)
+            if random.random() > 0.5:
+                for c in range(3):
+                    shift = random.uniform(-0.05, 0.05)
+                    clip[:, :, :, c] = np.clip(clip[:, :, :, c] + shift, 0, 1)
+            # Random grayscale (destroys color artifacts, forces shape learning)
+            if random.random() > 0.85:
+                gray = clip[:, :, :, 0] * 0.299 + clip[:, :, :, 1] * 0.587 + clip[:, :, :, 2] * 0.114
+                clip[:, :, :, 0] = clip[:, :, :, 1] = clip[:, :, :, 2] = gray
+            # Random erasing — mask a patch across all frames (forces non-local features)
+            if random.random() > 0.5:
+                h, w = clip.shape[1], clip.shape[2]
+                eh, ew = random.randint(h // 8, h // 3), random.randint(w // 8, w // 3)
+                ey, ex = random.randint(0, h - eh), random.randint(0, w - ew)
+                clip[:, ey:ey+eh, ex:ex+ew, :] = np.random.uniform(0, 1, (clip.shape[0], eh, ew, 3)).astype(np.float32)
 
         # ImageNet normalize: (T, H, W, 3) → (T, 3, H, W)
         clip = (clip - IMAGENET_MEAN) / IMAGENET_STD
@@ -224,6 +241,17 @@ class PNGClipDataset(Dataset):
                 if len(loaded) == self.rppg_dim:
                     rppg_feat = torch.from_numpy(loaded)
 
+        # Load pre-extracted blink features from cache if available
+        # cache_dir/<manip>/<video_name>/blink_feat.npy  (16-d)
+        blink_feat = torch.zeros(16)
+        if self.blink_cache_dir is not None:
+            vpath_b = Path(vdir)
+            blink_path = self.blink_cache_dir / vpath_b.parent.name / vpath_b.name / "blink_feat.npy"
+            if blink_path.exists():
+                loaded_b = np.load(str(blink_path)).astype(np.float32)
+                if len(loaded_b) == 16:
+                    blink_feat = torch.from_numpy(loaded_b)
+
         # Frame differences: I(t) - I(t-1) — captures temporal motion artifacts
         frame_diffs = clip_tensor[1:] - clip_tensor[:-1]     # (T-1, 3, H, W)
         # Pad to length T by repeating last diff
@@ -234,7 +262,7 @@ class PNGClipDataset(Dataset):
             "frame_diffs": frame_diffs,           # (T, 3, H, W) — temporal motion
             "label": torch.tensor(float(label), dtype=torch.float32),
             "rppg_feat": rppg_feat,              # (rppg_dim,) — sync features or zeros
-            "blink_feat": torch.zeros(16),        # placeholder
+            "blink_feat": blink_feat,              # (16,) — blink stats or zeros
         }
 
 
@@ -356,17 +384,21 @@ def train(args):
     rppg_cache = args.rppg_cache if hasattr(args, "rppg_cache") else None
     rppg_dim = args.rppg_dim if hasattr(args, "rppg_dim") else 128
     rppg_ver = args.rppg_version if hasattr(args, "rppg_version") else 1
+    blink_cache = args.blink_cache if hasattr(args, "blink_cache") else None
     train_ds = PNGClipDataset(train_dirs, train_labels, args.clip_len, args.img_size,
                                augment=True, clips_per_video=args.clips_per_video,
                                max_videos=args.max_train_videos,
                                rppg_cache_dir=rppg_cache,
-                               rppg_dim=rppg_dim, rppg_version=rppg_ver)
+                               rppg_dim=rppg_dim, rppg_version=rppg_ver,
+                               blink_cache_dir=blink_cache)
     val_ds   = PNGClipDataset(val_dirs,   val_labels,   args.clip_len, args.img_size,
                                rppg_cache_dir=rppg_cache,
-                               rppg_dim=rppg_dim, rppg_version=rppg_ver)
+                               rppg_dim=rppg_dim, rppg_version=rppg_ver,
+                               blink_cache_dir=blink_cache)
     test_ds  = PNGClipDataset(test_dirs,  test_labels,  args.clip_len, args.img_size,
                                rppg_cache_dir=rppg_cache,
-                               rppg_dim=rppg_dim, rppg_version=rppg_ver)
+                               rppg_dim=rppg_dim, rppg_version=rppg_ver,
+                               blink_cache_dir=blink_cache)
 
     # Balanced sampler — use actual dataset labels (may be capped)
     tl = np.array(train_ds.labels)
@@ -521,6 +553,9 @@ def train(args):
     scaler = torch.amp.GradScaler("cuda") if args.fp16 and device.type == "cuda" else None
 
     # ─── Loss ────────────────────────────────────────────────────────────
+    label_smooth = getattr(args, 'label_smoothing', 0.0)
+    if label_smooth > 0:
+        print(f"Label smoothing: {label_smooth} (targets: {label_smooth/2:.3f} / {1-label_smooth/2:.3f})")
     criterion = nn.BCEWithLogitsLoss()
 
     out_dir = Path(args.out_dir)
@@ -528,6 +563,7 @@ def train(args):
     Path(args.log_dir).mkdir(parents=True, exist_ok=True)
 
     best_auc = 0.0
+    best_epoch = 0
     ema_val_auc = None   # EMA of val_auc — smoother signal for checkpoint saving
     start_time = time.time()
 
@@ -553,12 +589,17 @@ def train(args):
 
             optimizer.zero_grad(set_to_none=True)
 
+            # Apply label smoothing: 0→ε/2, 1→1-ε/2
+            targets = labels_b
+            if label_smooth > 0:
+                targets = targets * (1 - label_smooth) + label_smooth / 2
+
             with torch.amp.autocast("cuda", enabled=(scaler is not None)):
                 outputs = model(frames, rppg if use_physio else None,
                                         blink if use_physio else None,
                                         diffs)
                 logits = outputs["logit"]
-                loss = criterion(logits, labels_b)
+                loss = criterion(logits, targets)
 
             if scaler:
                 scaler.scale(loss).backward()
@@ -645,6 +686,7 @@ def train(args):
 
         if ema_val_auc > best_auc:
             best_auc = ema_val_auc
+            best_epoch = epoch
             torch.save({
                 "epoch": epoch,
                 "model_state_dict": model.state_dict(),
@@ -654,6 +696,11 @@ def train(args):
                 "args": vars(args),
             }, out_dir / f"{args.run_name}_best.pt")
             print(f"  >> New best AUC={val_auc:.4f}")
+
+        patience = getattr(args, 'patience', 0)
+        if patience > 0 and (epoch - best_epoch) >= patience:
+            print(f"  >> Early stopping: no improvement for {patience} epochs (best at epoch {best_epoch})")
+            break
 
         if total_time > 10.5 * 3600:
             print(f"  >> Time limit ({total_time/3600:.1f}h), stopping")
@@ -749,12 +796,18 @@ def parse_args():
                    help="Fuse pre-extracted rPPG features into classifier")
     p.add_argument("--rppg_cache", default=None,
                    help="Path to rPPG cache dir (output of extract_rppg_png.py or v2)")
+    p.add_argument("--blink_cache", default=None,
+                   help="Path to blink cache dir (output of extract_blinks_mp4.py)")
     p.add_argument("--rppg_dim", type=int, default=128,
                    help="rPPG feature dimension: 128 for v1 (FFT), 12 for v2 (sync)")
     p.add_argument("--rppg_version", type=int, default=1, choices=[1, 2],
                    help="rPPG version: 1=128-d FFT (old), 2=12-d L/R cheek sync (new)")
     p.add_argument("--use_motion", action="store_true", default=False,
                    help="Add frame-difference motion branch")
+    p.add_argument("--label_smoothing", type=float, default=0.0,
+                   help="Label smoothing factor (e.g., 0.1). Targets become ε/2 and 1-ε/2")
+    p.add_argument("--patience", type=int, default=0,
+                   help="Early stopping patience (0=disabled). Stop after N epochs without improvement.")
     p.add_argument("--num_workers",            type=int,   default=2)
     p.add_argument("--seed",                   type=int,   default=42)
     p.add_argument("--fp16", action="store_true", default=True)
