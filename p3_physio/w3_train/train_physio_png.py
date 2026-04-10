@@ -401,8 +401,8 @@ def train(args):
                 if len(feat) == rppg_dim:
                     n_with_feat += 1
                     feat_norms.append(float(np.linalg.norm(feat)))
-                    if rppg_ver == 2 and len(feat) >= 11:
-                        pcc_values.append(float(feat[10]))  # PCC is index 10
+                    if rppg_ver == 2 and len(feat) >= 7:
+                        pcc_values.append(float(feat[6]))  # pcc_raw is index 6
         pct = 100 * n_with_feat / min(200, len(train_ds.video_dirs))
         mean_norm = float(np.mean(feat_norms)) if feat_norms else 0.0
         print(f"rPPG v{rppg_ver} cache: {pct:.0f}% of sampled train videos have features "
@@ -438,8 +438,21 @@ def train(args):
         print(f"\nResuming from PhysioNet checkpoint: {args.resume_ckpt}")
         ckpt = torch.load(args.resume_ckpt, map_location=device, weights_only=False)
         state = ckpt.get("model_state_dict", ckpt)
-        missing, unexpected = model.load_state_dict(state, strict=False)
-        print(f"  Loaded {len(state)} tensors")
+        # Filter out tensors with shape mismatch (e.g., fusion layer when rppg_dim changed)
+        model_state = model.state_dict()
+        filtered_state = {}
+        skipped = []
+        for k, v in state.items():
+            if k in model_state and v.shape != model_state[k].shape:
+                skipped.append(f"{k}: ckpt {list(v.shape)} vs model {list(model_state[k].shape)}")
+            else:
+                filtered_state[k] = v
+        if skipped:
+            print(f"  Skipped {len(skipped)} size-mismatched keys (will init randomly):")
+            for s in skipped:
+                print(f"    {s}")
+        missing, unexpected = model.load_state_dict(filtered_state, strict=False)
+        print(f"  Loaded {len(filtered_state)}/{len(state)} tensors")
         if missing:
             print(f"  Missing keys ({len(missing)}): {missing[:5]}{'...' if len(missing) > 5 else ''}")
         if unexpected:
