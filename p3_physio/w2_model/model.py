@@ -47,6 +47,7 @@ class ModelConfig:
     # Backbone
     backbone: str = "efficientnet_b4"
     backbone_pretrained: bool = True
+    backbone_local_weights: str = None   # path to local .pth file (skip download)
     backbone_freeze_epochs: int = 2      # freeze backbone for first N epochs
 
     # Temporal
@@ -86,15 +87,30 @@ class FrameEncoder(nn.Module):
     Processes (B*T, C, H, W) and returns (B, T, D) frame features.
     """
 
-    def __init__(self, backbone: str = "efficientnet_b4", pretrained: bool = True):
+    def __init__(self, backbone: str = "efficientnet_b4", pretrained: bool = True,
+                 local_weights: str = None):
         super().__init__()
         if TIMM_AVAILABLE:
-            self.encoder = timm.create_model(
-                backbone,
-                pretrained=pretrained,
-                num_classes=0,       # remove classifier head
-                global_pool="avg",
-            )
+            if local_weights is not None:
+                # Load from local .pth file — no network download
+                self.encoder = timm.create_model(
+                    backbone,
+                    pretrained=False,
+                    num_classes=0,
+                    global_pool="avg",
+                )
+                state = torch.load(local_weights, map_location="cpu", weights_only=True)
+                # Filter out classifier keys (we set num_classes=0)
+                state = {k: v for k, v in state.items() if "classifier" not in k}
+                self.encoder.load_state_dict(state, strict=False)
+                print(f"  Loaded backbone weights from: {local_weights}")
+            else:
+                self.encoder = timm.create_model(
+                    backbone,
+                    pretrained=pretrained,
+                    num_classes=0,
+                    global_pool="avg",
+                )
             self.out_dim = self.encoder.num_features
         else:
             # Fallback: tiny conv stack for testing without timm
@@ -326,7 +342,8 @@ class PhysioNet(nn.Module):
         self.cfg = cfg
 
         # 1. Per-frame backbone
-        self.frame_encoder = FrameEncoder(cfg.backbone, cfg.backbone_pretrained)
+        self.frame_encoder = FrameEncoder(cfg.backbone, cfg.backbone_pretrained,
+                                          local_weights=cfg.backbone_local_weights)
         backbone_dim = self.frame_encoder.out_dim
 
         # 2. Temporal model (with projection from backbone_dim → temporal_dim)

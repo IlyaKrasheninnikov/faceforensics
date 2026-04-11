@@ -447,9 +447,11 @@ def train(args):
     # ─── Model ───────────────────────────────────────────────────────────
     use_physio = (args.w_pulse > 0 or args.w_blink > 0 or args.use_rppg_fusion)
     use_motion = getattr(args, 'use_motion', False)
+    local_wt = getattr(args, 'backbone_weights', None)
     cfg = ModelConfig(
-        backbone="efficientnet_b4",
-        backbone_pretrained=(args.baseline_ckpt is None and not (hasattr(args, 'resume_ckpt') and args.resume_ckpt)),
+        backbone="tf_efficientnet_b4",
+        backbone_pretrained=(local_wt is None and args.baseline_ckpt is None and not (hasattr(args, 'resume_ckpt') and args.resume_ckpt)),
+        backbone_local_weights=local_wt,
         temporal_model=args.temporal_model,
         temporal_layers=args.temporal_layers,
         temporal_dim=args.temporal_dim,
@@ -761,6 +763,8 @@ def parse_args():
                    help="Path to baseline_best.pt to init backbone weights only")
     p.add_argument("--resume_ckpt", default=None,
                    help="Path to a previous PhysioNet checkpoint to resume all weights from")
+    p.add_argument("--backbone_weights", default=None,
+                   help="Path to local .pth file for backbone (skips HF download)")
     p.add_argument("--out_dir",  default="./checkpoints")
     p.add_argument("--log_dir",  default="./logs")
     p.add_argument("--run_name", default="physio_png_v1")
