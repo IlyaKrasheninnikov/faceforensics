@@ -240,6 +240,11 @@ class PNGClipDataset(Dataset):
                 loaded = np.load(str(cache_feat)).astype(np.float32)
                 if len(loaded) == self.rppg_dim:
                     rppg_feat = torch.from_numpy(loaded)
+                elif len(loaded) < self.rppg_dim:
+                    # Zero-pad shorter features (e.g., 12-d v2 → 128-d to match checkpoint)
+                    padded = np.zeros(self.rppg_dim, dtype=np.float32)
+                    padded[:len(loaded)] = loaded
+                    rppg_feat = torch.from_numpy(padded)
 
         # Load pre-extracted blink features from cache if available
         # cache_dir/<manip>/<video_name>/blink_feat.npy  (16-d)
