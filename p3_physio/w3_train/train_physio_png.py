@@ -444,12 +444,37 @@ def train(args):
         if pct < 50:
             print("  [WARN] Less than 50% of videos have rPPG features — cache path may be wrong")
 
+    # ─── Blink cache diagnostic ───────────────────────────────────────────
+    if blink_cache:
+        n_blink_found = 0
+        n_blink_zero = 0
+        blink_norms = []
+        for vdir in train_ds.video_dirs[:200]:
+            vpath = Path(vdir)
+            bp = Path(blink_cache) / vpath.parent.name / vpath.name / "blink_feat.npy"
+            if bp.exists():
+                feat = np.load(str(bp)).astype(np.float32)
+                if len(feat) == 16:
+                    n_blink_found += 1
+                    norm = float(np.linalg.norm(feat))
+                    blink_norms.append(norm)
+                    if np.allclose(feat, 0):
+                        n_blink_zero += 1
+        pct_b = 100 * n_blink_found / min(200, len(train_ds.video_dirs))
+        mean_norm_b = float(np.mean(blink_norms)) if blink_norms else 0.0
+        print(f"Blink cache: {pct_b:.0f}% of sampled train videos have features "
+              f"(mean L2-norm={mean_norm_b:.3f}, zeros={n_blink_zero})")
+        if pct_b < 50:
+            print("  [WARN] Less than 50% of videos have blink features — cache path may be wrong")
+    else:
+        print("Blink cache: NOT configured (blink features will be zeros)")
+
     # ─── Model ───────────────────────────────────────────────────────────
     use_physio = (args.w_pulse > 0 or args.w_blink > 0 or args.use_rppg_fusion)
     use_motion = getattr(args, 'use_motion', False)
     local_wt = getattr(args, 'backbone_weights', None)
     cfg = ModelConfig(
-        backbone="tf_efficientnet_b4",
+        backbone="efficientnet_b4",
         backbone_pretrained=(local_wt is None and args.baseline_ckpt is None and not (hasattr(args, 'resume_ckpt') and args.resume_ckpt)),
         backbone_local_weights=local_wt,
         temporal_model=args.temporal_model,
@@ -582,12 +607,22 @@ def train(args):
         losses, all_preds, all_targets = [], [], []
 
         pbar = tqdm(train_dl, desc=f"Epoch {epoch}/{args.epochs}", leave=False)
-        for batch in pbar:
+        _blink_checked = False
+        for batch_idx, batch in enumerate(pbar):
             frames   = batch["frames"].to(device, non_blocking=True)       # (B, T, 3, H, W)
             labels_b = batch["label"].to(device, non_blocking=True)
             rppg     = batch["rppg_feat"].to(device, non_blocking=True)    # (B, rppg_dim)
             blink    = batch["blink_feat"].to(device, non_blocking=True)   # (B, 16)
             diffs    = batch["frame_diffs"].to(device, non_blocking=True) if use_motion else None
+
+            # First-batch sanity check: are blink features non-zero?
+            if epoch == 1 and not _blink_checked:
+                _blink_checked = True
+                blink_nonzero = (blink.abs().sum(dim=1) > 0).float().mean().item()
+                rppg_nonzero = (rppg.abs().sum(dim=1) > 0).float().mean().item()
+                print(f"  [SANITY] Batch 0: blink non-zero: {blink_nonzero*100:.0f}%, "
+                      f"rppg non-zero: {rppg_nonzero*100:.0f}%, "
+                      f"blink L2-norm: {blink.norm(dim=1).mean().item():.3f}")
 
             optimizer.zero_grad(set_to_none=True)
 
