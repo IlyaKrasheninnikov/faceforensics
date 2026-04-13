@@ -343,7 +343,7 @@ def main(args):
             with torch.amp.autocast("cuda", enabled=(scaler is not None)):
                 frame_feats = model.frame_encoder(frames)  # (B, T, D)
                 pooled = frame_feats.mean(dim=1)  # (B, D) — mean pool over time
-            all_feats.append(pooled.cpu())
+            all_feats.append(pooled.float().cpu())
             all_labels.extend(batch["label"].numpy().tolist())
             all_manips.extend(batch["manip"])
             all_vidx.extend(batch["video_idx"].numpy().tolist())
