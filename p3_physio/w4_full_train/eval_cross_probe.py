@@ -72,53 +72,87 @@ def scan_ff_folders(ff_root: str):
 
 
 def scan_celebdf_folders(celebdf_root: str):
-    """Scan CelebDF-v2 frame folders."""
+    """Scan CelebDF-v2 frame folders (diwakarsehgal/celebdfv2 Kaggle dataset).
+
+    Expected structure:
+        crop/{Train,Test}/{real,fake}/{video_id}/ *.png
+    """
     root = Path(celebdf_root)
     video_dirs, labels = [], []
 
-    # Real videos
-    for real_dir_name in ["Celeb-real", "YouTube-real"]:
-        rdir = root / real_dir_name
-        if not rdir.exists():
-            # Try with 'frames' subfolder
-            rdir = root / "frames" / real_dir_name
-        if not rdir.exists():
-            continue
-        for sd in sorted(d for d in rdir.iterdir() if d.is_dir()):
-            if any(sd.glob("*.png")) or any(sd.glob("*.jpg")):
-                video_dirs.append(str(sd))
-                labels.append(0)
+    for split in ["Test", "Train"]:
+        for label_name, label in [("real", 0), ("fake", 1)]:
+            ldir = root / split / label_name
+            if not ldir.exists():
+                # Also try: crop/Test/real etc.
+                ldir = root / "crop" / split / label_name
+            if not ldir.exists():
+                continue
+            subdirs = sorted(d for d in ldir.iterdir() if d.is_dir())
+            count = 0
+            for sd in subdirs:
+                if any(sd.glob("*.png")) or any(sd.glob("*.jpg")):
+                    video_dirs.append(str(sd))
+                    labels.append(label)
+                    count += 1
+            print(f"  CelebDF {split}/{label_name}: {count} video folders")
 
-    # Fake videos
-    for fake_dir_name in ["Celeb-synthesis"]:
-        fdir = root / fake_dir_name
-        if not fdir.exists():
-            fdir = root / "frames" / fake_dir_name
-        if not fdir.exists():
-            continue
-        for sd in sorted(d for d in fdir.iterdir() if d.is_dir()):
-            if any(sd.glob("*.png")) or any(sd.glob("*.jpg")):
-                video_dirs.append(str(sd))
-                labels.append(1)
+    return video_dirs, labels
+
+
+def scan_dfdc_faces(dfdc_root: str):
+    """Scan DFDC face images (itamargr/dfdc-faces-of-the-train-sample).
+
+    Structure: {train,validation}/{real,fake}/ individual face images.
+    Since images are individual faces (not grouped by video), we group them
+    by video ID prefix (e.g., 'aapnvogymq' from 'aapnvogymq_0_0.png').
+
+    Returns video_dirs (pseudo-dirs = grouped file lists), labels.
+    """
+    root = Path(dfdc_root)
+    video_dirs, labels = [], []
+
+    for split in ["validation", "train"]:
+        for label_name, label in [("real", 0), ("fake", 1)]:
+            ldir = root / split / label_name
+            if not ldir.exists():
+                continue
+            # Group files by video ID prefix
+            vid_to_files = {}
+            for f in ldir.iterdir():
+                if f.suffix.lower() in ('.png', '.jpg', '.jpeg'):
+                    # filename like: aapnvogymq_0_0.png → video_id = aapnvogymq
+                    vid_id = f.stem.rsplit('_', 2)[0] if f.stem.count('_') >= 2 else f.stem.split('_')[0]
+                    vid_to_files.setdefault(vid_id, []).append(str(f))
+
+            for vid_id, files in sorted(vid_to_files.items()):
+                video_dirs.append(files)  # list of file paths instead of dir
+                labels.append(label)
+            print(f"  DFDC {split}/{label_name}: {len(vid_to_files)} video groups")
 
     return video_dirs, labels
 
 
 def scan_dfdc_folders(dfdc_root: str):
-    """Scan DFDC frame folders."""
+    """Scan DFDC frame folders (generic structure).
+
+    Tries multiple structures:
+    1. diwakarsehgal format: {split}/{real,fake}/{video_id}/frames
+    2. itamargr format: {split}/{real,fake}/individual_images
+    3. Generic: {real,fake}/{video_id}/frames
+    """
     root = Path(dfdc_root)
     video_dirs, labels = [], []
 
+    # Try generic real/fake folder structure
     for label_name, label in [("real", 0), ("fake", 1)]:
-        ldir = root / label_name
-        if not ldir.exists():
-            ldir = root / "frames" / label_name
-        if not ldir.exists():
-            continue
-        for sd in sorted(d for d in ldir.iterdir() if d.is_dir()):
-            if any(sd.glob("*.png")) or any(sd.glob("*.jpg")):
-                video_dirs.append(str(sd))
-                labels.append(label)
+        for candidate in [root / label_name, root / "frames" / label_name]:
+            if not candidate.exists():
+                continue
+            for sd in sorted(d for d in candidate.iterdir() if d.is_dir()):
+                if any(sd.glob("*.png")) or any(sd.glob("*.jpg")):
+                    video_dirs.append(str(sd))
+                    labels.append(label)
 
     return video_dirs, labels
 
@@ -126,23 +160,34 @@ def scan_dfdc_folders(dfdc_root: str):
 # ─── Dataset ─────────────────────────────────────────────────────────────────
 
 class ClipDataset(Dataset):
+    """Handles two formats:
+    - video_dirs[i] = str (directory path) → list frames from that dir
+    - video_dirs[i] = list[str] (file paths) → use those files directly (DFDC faces)
+    """
     def __init__(self, video_dirs, labels, clip_len=16, img_size=224):
-        self.video_dirs = video_dirs
         self.labels = labels
         self.clip_len = clip_len
         self.img_size = img_size
-        self.frame_lists = []
+        self.frame_paths = []  # list of lists of absolute file paths
         for vd in video_dirs:
-            frames = sorted(f for f in os.listdir(vd) if f.endswith(('.png', '.jpg', '.jpeg')))
-            self.frame_lists.append(frames)
+            if isinstance(vd, list):
+                # Already a list of file paths (DFDC faces format)
+                self.frame_paths.append(sorted(vd))
+            else:
+                # Directory path — list files
+                frames = sorted(
+                    os.path.join(vd, f)
+                    for f in os.listdir(vd)
+                    if f.endswith(('.png', '.jpg', '.jpeg'))
+                )
+                self.frame_paths.append(frames)
 
     def __len__(self):
-        return len(self.video_dirs)
+        return len(self.frame_paths)
 
     def __getitem__(self, idx):
-        vdir = self.video_dirs[idx]
         label = self.labels[idx]
-        all_frames = self.frame_lists[idx]
+        all_frames = self.frame_paths[idx]
         n = len(all_frames)
 
         if n == 0:
@@ -153,7 +198,7 @@ class ClipDataset(Dataset):
             indices = [(start + i) % n for i in range(self.clip_len)]
             imgs = []
             for fi in indices:
-                fpath = os.path.join(vdir, all_frames[fi])
+                fpath = all_frames[fi]
                 img = cv2.imread(fpath)
                 if img is None:
                     img = np.zeros((self.img_size, self.img_size, 3), dtype=np.uint8)
@@ -362,6 +407,11 @@ def main(args):
         if dfdc_dirs:
             cross_datasets["DFDC"] = (dfdc_dirs, dfdc_labels)
 
+    if args.dfdc_faces_root:
+        dfdc_f_dirs, dfdc_f_labels = scan_dfdc_faces(args.dfdc_faces_root)
+        if dfdc_f_dirs:
+            cross_datasets["DFDC-faces"] = (dfdc_f_dirs, dfdc_f_labels)
+
     for ds_name, (ds_dirs, ds_labels) in cross_datasets.items():
         print(f"\n{'='*60}")
         print(f"Cross-dataset: {ds_name}")
@@ -407,7 +457,8 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description="W4: Cross-dataset eval via linear probe")
     p.add_argument("--ff_root", required=True)
     p.add_argument("--celebdf_root", default=None)
-    p.add_argument("--dfdc_root", default=None)
+    p.add_argument("--dfdc_root", default=None, help="DFDC with frame folders (real/fake/video_id/)")
+    p.add_argument("--dfdc_faces_root", default=None, help="DFDC faces dataset (itamargr format: train/real/*.png)")
     p.add_argument("--resume_ckpt", required=True)
     p.add_argument("--rppg_cache", default=None)
     p.add_argument("--blink_cache", default=None)
