@@ -305,10 +305,7 @@ def main(args):
     print(f"Backbone feature dim: {feat_dim}")
 
     # Linear probe head: features → logit
-    probe_head = nn.Sequential(
-        nn.BatchNorm1d(feat_dim),
-        nn.Linear(feat_dim, 1),
-    ).to(device)
+    probe_head = nn.Linear(feat_dim, 1).to(device)
     print(f"Probe head: {sum(p.numel() for p in probe_head.parameters())} params")
 
     # Also test: features + blink/rppg → logit
@@ -355,6 +352,12 @@ def main(args):
     train_feats, train_labels_arr, train_manips_arr, _ = extract_features(train_dl, "Train features")
     val_feats, val_labels_arr, val_manips_arr, _ = extract_features(val_dl, "Val features")
     test_feats, test_labels_arr, test_manips_arr, _ = extract_features(test_dl, "Test features")
+    # Clean NaN/Inf in features
+    for name, feats in [("train", train_feats), ("val", val_feats), ("test", test_feats)]:
+        n_nan = torch.isnan(feats).sum().item()
+        if n_nan > 0:
+            print(f"  [WARN] {name}: {n_nan} NaN values in features — replacing with 0")
+            feats.nan_to_num_(nan=0.0, posinf=0.0, neginf=0.0)
     print(f"Feature extraction: {time.time()-t0:.1f}s")
     print(f"Train: {train_feats.shape}, Val: {val_feats.shape}, Test: {test_feats.shape}")
 
@@ -413,12 +416,14 @@ def main(args):
         probe_head.eval()
         with torch.no_grad():
             val_logits = probe_head(val_feat_tensor).squeeze(-1)
-            val_probs = torch.sigmoid(val_logits).cpu().numpy()
+            val_probs = torch.sigmoid(val_logits.clamp(-20, 20)).cpu().numpy()
+            val_probs = np.nan_to_num(val_probs, nan=0.5)
             val_auc = roc_auc_score(val_labels_arr, val_probs)
             val_eer = compute_eer(val_probs, val_labels_arr)
 
             train_logits = probe_head(train_feat_tensor).squeeze(-1)
-            train_probs = torch.sigmoid(train_logits).cpu().numpy()
+            train_probs = torch.sigmoid(train_logits.clamp(-20, 20)).cpu().numpy()
+            train_probs = np.nan_to_num(train_probs, nan=0.5)
             train_auc = roc_auc_score(train_labels_arr, train_probs)
 
         avg_loss = epoch_loss / n_batches
@@ -448,7 +453,8 @@ def main(args):
     def eval_split(feats, labels, manips, name, use_tta_feats=None, tta_labels=None, tta_manips=None):
         with torch.no_grad():
             logits = probe_head(feats.to(device)).squeeze(-1)
-            probs = torch.sigmoid(logits).cpu().numpy()
+            probs = torch.sigmoid(logits.clamp(-20, 20)).cpu().numpy()
+            probs = np.nan_to_num(probs, nan=0.5)
 
         auc = roc_auc_score(labels, probs)
         eer = compute_eer(probs, labels)
