@@ -377,6 +377,7 @@ def main(args):
             tta_labels_avg.append(test_tta_labels[mask][0])
             tta_manips_avg.append(np.array(test_tta_manips)[mask][0])
         test_tta_feats_avg = torch.stack(tta_feats_avg)
+        test_tta_feats_avg.nan_to_num_(nan=0.0, posinf=0.0, neginf=0.0)
         test_tta_labels_avg = np.array(tta_labels_avg)
         test_tta_manips_avg = tta_manips_avg
         print(f"TTA averaged: {test_tta_feats_avg.shape}")
