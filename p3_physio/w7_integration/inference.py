@@ -214,7 +214,9 @@ if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     from w2_model.model import PhysioNet
-    ckpt = torch.load(args.checkpoint, map_location=device)
+    # weights_only=False required because checkpoint pickles numpy scalars (config dict)
+    # and PyTorch 2.6 made weights_only=True the default.
+    ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
     model = PhysioNet(ckpt["config"]).to(device)
     model.load_state_dict(ckpt["model_state_dict"])
 
