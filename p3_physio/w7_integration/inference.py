@@ -114,9 +114,9 @@ def predict(
     # ─── Model inference ──────────────────────────────────────────────────────
     model.eval()
     with torch.no_grad():
-        frames_t = torch.from_numpy(frames).permute(0, 3, 1, 2).unsqueeze(0).to(device)  # (1, T, 3, H, W)
-        rppg_t = torch.from_numpy(rppg_feat).unsqueeze(0).to(device)
-        blink_t = torch.from_numpy(blink_feat).unsqueeze(0).to(device)
+        frames_t = torch.from_numpy(frames).float().permute(0, 3, 1, 2).unsqueeze(0).to(device)  # (1, T, 3, H, W)
+        rppg_t = torch.from_numpy(rppg_feat).float().unsqueeze(0).to(device)
+        blink_t = torch.from_numpy(blink_feat).float().unsqueeze(0).to(device)
 
         outputs = model(frames_t, rppg_t, blink_t)
         raw_logit = outputs["logit"].cpu().item()
