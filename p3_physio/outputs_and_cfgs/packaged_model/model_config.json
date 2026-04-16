@@ -1,0 +1,32 @@
+{
+  "backbone": "efficientnet_b4",
+  "backbone_pretrained": false,
+  "temporal_model": "mean",
+  "clip_len": 16,
+  "img_size": 224,
+  "feat_dim": 1792,
+  "rppg_dim": 12,
+  "rppg_version": 2,
+  "blink_dim": 16,
+  "approach": "linear_probe",
+  "best_variant": "backbone+rppg+blink",
+  "imagenet_mean": [
+    0.485,
+    0.456,
+    0.406
+  ],
+  "imagenet_std": [
+    0.229,
+    0.224,
+    0.225
+  ],
+  "training_dataset": "FaceForensics++ c23",
+  "training_split": "80/10/10 identity-based",
+  "metrics": {
+    "ff_val_auc": 0.783,
+    "ff_test_auc": 0.73,
+    "ff_test_eer": 0.314,
+    "celebdf_auc": 0.574,
+    "dfdc_auc": 0.539
+  }
+}
