@@ -1,0 +1,23 @@
+## Table 1: Ablation Results (FF++ c23 Test)
+
+| Variant | Dim | AUC | EER | AP | ECE |
+|---------|-----|-----|-----|-----|-----|
+| Backbone only | 1792 | 0.7274 | 0.3400 | 0.9195 | 0.0975 |
+| Backbone + rPPG | 1804 | 0.7262 | 0.3410 | 0.9212 | 0.1075 |
+| Backbone + Blink | 1808 | 0.7262 | 0.3370 | 0.9191 | 0.0957 |
+| Full fusion (ours) | 1820 | 0.7296 | 0.3140 | 0.9212 | 0.1102 |
+| rPPG only | 12 | 0.5094 | 0.4880 | 0.8398 | 0.1583 |
+| Blink only | 16 | 0.5994 | 0.4340 | 0.8808 | 0.4152 |
+| FakeCatcher SVM | 12 | 0.4871 | 0.5040 | 0.8282 | 0.0163 |
+
+## Table 2: Per-Manipulation AUC (Test)
+
+| Variant | Deepfakes | Face2Face | FaceShifter | FaceSwap | NeuralTextures |
+|---------|------|------|------|------|------|
+| Backbone only | 0.783 | 0.725 | 0.749 | 0.685 | 0.695 |
+| Backbone + rPPG | 0.780 | 0.723 | 0.748 | 0.688 | 0.693 |
+| Backbone + Blink | 0.782 | 0.723 | 0.748 | 0.685 | 0.694 |
+| Full fusion (ours) | 0.788 | 0.724 | 0.751 | 0.690 | 0.695 |
+| rPPG only | 0.509 | 0.504 | 0.522 | 0.508 | 0.504 |
+| Blink only | 0.658 | 0.532 | 0.600 | 0.623 | 0.584 |
+| FakeCatcher SVM | 0.506 | 0.455 | 0.507 | 0.477 | 0.490 |

@@ -1,0 +1,303 @@
+{
+  "1_backbone_only": {
+    "description": "EfficientNet-B4 backbone features (1792-d)",
+    "feat_dim": 1792,
+    "val_auc": 0.7825600000000001,
+    "val_eer": 0.271,
+    "val_ap": 0.938410362981545,
+    "val_ece": 0.06389671246210735,
+    "test_auc": 0.7273799999999999,
+    "test_eer": 0.33999999999999997,
+    "test_ap": 0.9195247822472501,
+    "test_ece": 0.09749500586340823,
+    "test_per_manip": {
+      "Deepfakes": {
+        "auc": 0.7827,
+        "eer": 0.28500000000000003,
+        "n": 100
+      },
+      "Face2Face": {
+        "auc": 0.7248999999999999,
+        "eer": 0.37,
+        "n": 100
+      },
+      "FaceShifter": {
+        "auc": 0.7491,
+        "eer": 0.33999999999999997,
+        "n": 100
+      },
+      "FaceSwap": {
+        "auc": 0.6853,
+        "eer": 0.38,
+        "n": 100
+      },
+      "NeuralTextures": {
+        "auc": 0.6949,
+        "eer": 0.37,
+        "n": 100
+      },
+      "original": {
+        "n": 100,
+        "type": "real"
+      }
+    }
+  },
+  "2_backbone+rppg": {
+    "description": "Backbone + rPPG (1792+12)",
+    "feat_dim": 1804,
+    "val_auc": 0.7762,
+    "val_eer": 0.29600000000000004,
+    "val_ap": 0.9374805847132893,
+    "val_ece": 0.08207891706998147,
+    "test_auc": 0.7262400000000001,
+    "test_eer": 0.34099999999999997,
+    "test_ap": 0.9212204540752341,
+    "test_ece": 0.10754122298831742,
+    "test_per_manip": {
+      "Deepfakes": {
+        "auc": 0.7805,
+        "eer": 0.28,
+        "n": 100
+      },
+      "Face2Face": {
+        "auc": 0.7225999999999999,
+        "eer": 0.375,
+        "n": 100
+      },
+      "FaceShifter": {
+        "auc": 0.7481,
+        "eer": 0.30000000000000004,
+        "n": 100
+      },
+      "FaceSwap": {
+        "auc": 0.6875,
+        "eer": 0.365,
+        "n": 100
+      },
+      "NeuralTextures": {
+        "auc": 0.6925,
+        "eer": 0.365,
+        "n": 100
+      },
+      "original": {
+        "n": 100,
+        "type": "real"
+      }
+    }
+  },
+  "3_backbone+blink": {
+    "description": "Backbone + Blink (1792+16)",
+    "feat_dim": 1808,
+    "val_auc": 0.78314,
+    "val_eer": 0.268,
+    "val_ap": 0.9381021507367715,
+    "val_ece": 0.06321000467985866,
+    "test_auc": 0.7261799999999999,
+    "test_eer": 0.33699999999999997,
+    "test_ap": 0.9191272999996201,
+    "test_ece": 0.09568067637582622,
+    "test_per_manip": {
+      "Deepfakes": {
+        "auc": 0.7816,
+        "eer": 0.29500000000000004,
+        "n": 100
+      },
+      "Face2Face": {
+        "auc": 0.7231000000000001,
+        "eer": 0.355,
+        "n": 100
+      },
+      "FaceShifter": {
+        "auc": 0.7476,
+        "eer": 0.33999999999999997,
+        "n": 100
+      },
+      "FaceSwap": {
+        "auc": 0.6845999999999999,
+        "eer": 0.37,
+        "n": 100
+      },
+      "NeuralTextures": {
+        "auc": 0.694,
+        "eer": 0.375,
+        "n": 100
+      },
+      "original": {
+        "n": 100,
+        "type": "real"
+      }
+    }
+  },
+  "4_backbone+rppg+blink": {
+    "description": "Backbone + rPPG + Blink (full fusion)",
+    "feat_dim": 1820,
+    "val_auc": 0.78,
+    "val_eer": 0.31499999999999995,
+    "val_ap": 0.9390174604721184,
+    "val_ece": 0.07688313384850826,
+    "test_auc": 0.72959,
+    "test_eer": 0.31399999999999995,
+    "test_ap": 0.9211641092577046,
+    "test_ece": 0.11015844384829206,
+    "test_per_manip": {
+      "Deepfakes": {
+        "auc": 0.7881499999999999,
+        "eer": 0.26,
+        "n": 100
+      },
+      "Face2Face": {
+        "auc": 0.7242,
+        "eer": 0.345,
+        "n": 100
+      },
+      "FaceShifter": {
+        "auc": 0.7513000000000001,
+        "eer": 0.29000000000000004,
+        "n": 100
+      },
+      "FaceSwap": {
+        "auc": 0.6896,
+        "eer": 0.35,
+        "n": 100
+      },
+      "NeuralTextures": {
+        "auc": 0.6946999999999999,
+        "eer": 0.37,
+        "n": 100
+      },
+      "original": {
+        "n": 100,
+        "type": "real"
+      }
+    }
+  },
+  "5_rppg_only": {
+    "description": "rPPG features only (12-d)",
+    "feat_dim": 12,
+    "val_auc": 0.5094599999999999,
+    "val_eer": 0.478,
+    "val_ap": 0.8363029302548132,
+    "val_ece": 0.15769378344217932,
+    "test_auc": 0.50942,
+    "test_eer": 0.488,
+    "test_ap": 0.8398375103487172,
+    "test_ece": 0.1583058635393778,
+    "test_per_manip": {
+      "Deepfakes": {
+        "auc": 0.5089,
+        "eer": 0.515,
+        "n": 100
+      },
+      "Face2Face": {
+        "auc": 0.5039,
+        "eer": 0.51,
+        "n": 100
+      },
+      "FaceShifter": {
+        "auc": 0.5223,
+        "eer": 0.47,
+        "n": 100
+      },
+      "FaceSwap": {
+        "auc": 0.5082,
+        "eer": 0.49,
+        "n": 100
+      },
+      "NeuralTextures": {
+        "auc": 0.5038,
+        "eer": 0.515,
+        "n": 100
+      },
+      "original": {
+        "n": 100,
+        "type": "real"
+      }
+    }
+  },
+  "6_blink_only": {
+    "description": "Blink features only (16-d)",
+    "feat_dim": 16,
+    "val_auc": 0.55388,
+    "val_eer": 0.44399999999999995,
+    "val_ap": 0.8565282421954293,
+    "val_ece": 0.42002293112998207,
+    "test_auc": 0.59938,
+    "test_eer": 0.43399999999999994,
+    "test_ap": 0.8807671139428568,
+    "test_ece": 0.41523485299199814,
+    "test_per_manip": {
+      "Deepfakes": {
+        "auc": 0.6579999999999999,
+        "eer": 0.38,
+        "n": 100
+      },
+      "Face2Face": {
+        "auc": 0.5324,
+        "eer": 0.47,
+        "n": 100
+      },
+      "FaceShifter": {
+        "auc": 0.5997,
+        "eer": 0.43000000000000005,
+        "n": 100
+      },
+      "FaceSwap": {
+        "auc": 0.6228,
+        "eer": 0.42500000000000004,
+        "n": 100
+      },
+      "NeuralTextures": {
+        "auc": 0.584,
+        "eer": 0.43999999999999995,
+        "n": 100
+      },
+      "original": {
+        "n": 100,
+        "type": "real"
+      }
+    }
+  },
+  "7_fakecatcher_svm": {
+    "description": "FakeCatcher-style SVM on rPPG features",
+    "feat_dim": 12,
+    "val_auc": 0.0,
+    "val_eer": 0.0,
+    "val_ap": 0.0,
+    "val_ece": 0.0,
+    "test_auc": 0.48714,
+    "test_eer": 0.504,
+    "test_ap": 0.8281881357664731,
+    "test_ece": 0.016336951700423482,
+    "test_per_manip": {
+      "Deepfakes": {
+        "auc": 0.5065,
+        "eer": 0.52,
+        "n": 100
+      },
+      "Face2Face": {
+        "auc": 0.45459999999999995,
+        "eer": 0.53,
+        "n": 100
+      },
+      "FaceShifter": {
+        "auc": 0.5070999999999999,
+        "eer": 0.485,
+        "n": 100
+      },
+      "FaceSwap": {
+        "auc": 0.4775,
+        "eer": 0.5,
+        "n": 100
+      },
+      "NeuralTextures": {
+        "auc": 0.49,
+        "eer": 0.495,
+        "n": 100
+      },
+      "original": {
+        "n": 100,
+        "type": "real"
+      }
+    }
+  }
+}
