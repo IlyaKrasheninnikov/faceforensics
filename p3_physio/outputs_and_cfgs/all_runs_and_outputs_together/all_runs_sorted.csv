@@ -1,0 +1,91 @@
+order,date,week,script,run_name,description,epochs,best_val_auc,key_result
+1,~2026-03-18,W1,signal_analysis.py,w1_signal_haar,"Signal analysis with Haar cascade face detector — no significant results due to poor face detection",0,,No significant features found (Haar cascade too noisy)
+2,~2026-03-18,W1,extract_rppg.py,w1_rppg_real,"rPPG extraction on 100 REAL videos (FF++ original)",0,,SNR ~17dB; extracted rPPG signals from real videos
+3,~2026-03-18,W1,extract_rppg.py,w1_rppg_fake,"rPPG extraction on 100 FAKE videos (FF++ Deepfakes)",0,,SNR ~17dB; extracted rPPG signals from fake videos
+4,~2026-03-18,W1,extract_blinks.py,w1_blinks_real,"Blink extraction on 100 REAL videos",0,,Blink rate 27.3 blinks/min for real videos
+5,~2026-03-18,W1,extract_blinks.py,w1_blinks_fake,"Blink extraction on 100 FAKE videos",0,,Blink rate 17.2 blinks/min for fake videos
+6,~2026-03-19,W1,signal_analysis.py,w1_signal_mediapipe,"Signal analysis with MediaPipe face detector — 4/9 features significant",0,,ear_entropy p=0.0000; blinks_per_min p=0.0007; ibi_cv p=0.0007; mean_bpm p=0.0017
+7,2026-03-20,W2,train_pretrain.py,pretrain_v1,"First pretrain attempt — CRASHED with CUDA OOM (from conversation)",0,,"CUDA OutOfMemoryError; never completed an epoch (recovered from conversation transcript)"
+8,2026-03-20,W2,train_pretrain.py,pretrain_v2,"Self-supervised pretraining on 1000 real videos (pulse+blink tasks); 10 epochs; fixed OOM",10,,Pulse loss 0.055→0.005; blink loss 0.494→0.388; 31.7M params
+9,2026-03-22,W3,train.py,w3_train_v3,"First full training attempt — backbone unfrozen after epoch 2; Trackio SSE crashes",10,0.5287,"Peak AUC 0.529@ep2 then degrades (catastrophic forgetting); crashed with Trackio SSE + torch.load weights_only error"
+10,2026-03-23,W3,train.py,w3_train_v4 (attempt 1),"Old mp4 pipeline — first attempt; ep=10 clip=32 bs=2 lr_bb=1e-5; Trackio SSE",2,0.5371,"AUC peak 0.5371@ep2; OSError read-only FS on signal cache (NEW_FOUND #5)"
+11,2026-03-23,W3,train.py,w3_train_v4 (attempt 2),"Old mp4 pipeline — retry; same config",3,0.5287,"AUC peak 0.5287@ep2; last=0.4609@ep3; Trackio SSE + read-only FS (NEW_FOUND #6)"
+12,2026-03-24,W3,train.py,w3_train_v5_identity_fix,"Train with identity leak fix; old mp4 pipeline; ep=10 clip=32 bs=2",2,0.5075,"AUC peak 0.5075@ep2; identity leak fix did not improve results (NEW_FOUND #7)"
+13,2026-03-24,W3,train.py,w3_v6_cls_only,"Class-only loss (w_pulse=0 w_blink=0); ep=5 clip=32 bs=2",3,0.5195,"AUC peak 0.5195@ep3; cls-only still poor on old pipeline (NEW_FOUND #8)"
+14,2026-03-25,W3,train.py,w3_v7_cls_only_pw_fix,"Class-only with posweight fix; ep=5 clip=32 bs=2 lr_bb=1e-5",4,0.5195,"AUC peak 0.5195@ep3; last=0.5156@ep4; posweight fix attempted (NEW_FOUND #1; conversation)"
+15,~2026-03-25,W3,train_baseline.py,baseline_v1 (attempt 1),"EfficientNet-B4 baseline; 5 epochs; BAD — no ImageNet normalization",5,0.4273,"Poor AUC=0.427; last=0.3473@ep5; below chance due to missing ImageNet normalization (from conversation)"
+16,~2026-03-25,W3,train_baseline.py,baseline_v1 (attempt 2),"EfficientNet-B4 baseline with ImageNet normalization fix",5,0.6934,"AUC jumps to 0.693; last=0.6724@ep5 — ImageNet normalization was the critical bug"
+17,2026-03-26,W3,train.py,w3_v8_norm_fix,"Old pipeline w/ ImageNet norm fix; ep=5 clip=32 bs=6 lr_bb=1e-5",0,,"No val_auc logged — failed early (NEW_FOUND #10)"
+18,2026-03-26,W3,train.py,w3_v8_norm_fix_1 (attempts 1-3),"w3_v8_norm_fix 3 retry attempts; same config",0,,"All 3 retries logged no val_auc — failed (NEW_FOUND #11, #12, #13)"
+19,~2026-03-26,W3,train_physio_png.py,physio_transformer_v1,"Transformer temporal (1st variant); ep=15 clip=8 bs=8; Trackio SSE",0,,"No epoch data; Trackio SSE failures (NEW_FOUND #2; conversation)"
+20,~2026-03-26,W3,train_physio_png.py,physio_transformer_v2,"Transformer temporal (2 layers); frozen backbone 10ep then unfreeze; clip_len=8",0,,"Output truncated; Trackio SSE (conversation)"
+21,~2026-03-26,W3,train_physio_png.py,physio_transformer_v3,"Transformer temporal v3 — tuning hyperparams",20,0.7689,Best AUC=0.769 with transformer temporal
+22,~2026-03-26,W3,train_physio_png.py,physio_transformer_v4,"Transformer temporal v4 — different LR schedule",20,0.7299,AUC dropped to 0.730
+23,~2026-03-26,W3,train_physio_png.py,physio_transformer_v5,"Transformer temporal v5 — more epochs",25,0.5325,"Collapsed to 0.533 — overfitting or bad hyperparams"
+24,~2026-03-26,W3,train_physio_png.py,physio_transformer_v6,"Transformer temporal v6",25,0.7199,AUC=0.720
+25,2026-03-27,W3,train.py,w3_v8_cls_baseline,"Class-only baseline on old pipeline; ep=5 clip=32 bs=2",0,,"No val_auc logged (NEW_FOUND #14)"
+26,2026-03-27,W3,train.py,w3_v9_stable (NEW_FOUND),"Stability attempt; ep=5 clip=32 bs=2",0,,"No val_auc logged (NEW_FOUND #15)"
+27,2026-03-27,W3,train.py,w3_v10_capped,"Capped training (short run); ep=5 clip=32 bs=2",0,,"No val_auc logged (NEW_FOUND #16)"
+28,2026-03-27,W3,train.py,w3_v9_stable (collected),"Old pipeline stability attempt from collected CSV",0,,"Likely failed or no results"
+29,2026-03-27,W3,train.py,w3_v11_robust,"Old pipeline robustness attempt; 10 epochs",10,0.5735,"AUC=0.574 — old pipeline still worse than PNG approach"
+30,~2026-03-27,W3,train_physio_png.py,physio_transformer_v7,"Transformer temporal v7 — 30 epochs",30,0.7568,AUC=0.757
+31,~2026-03-27,W3,train_physio_png.py,physio_transformer_v8,"Transformer temporal v8 — final transformer variant; 20 epochs",20,0.7535,"AUC peak 0.7535; last=0.7169@ep20 (conversation); transformer experiments concluded"
+32,~2026-03-28,W3,train_baseline.py,baseline_png_v1,"PNG pipeline baseline v1; 10 epochs",10,0.6696,"AUC=0.6696 best; last=0.6577@ep10; 16.5 min (conversation)"
+33,~2026-03-28,W3,train_baseline.py,baseline_png_v2,"PNG pipeline baseline v2; 20 epochs",20,0.8081,"★ AUC peak 0.8081@ep10; last=0.8043@ep20 (conversation)"
+34,~2026-03-28,W3,train_baseline.py,baseline_png_v3,"Baseline PNG pipeline v3; 30 epochs",30,0.6684,AUC=0.668 baseline
+35,~2026-03-28,W3,train_baseline.py,baseline_png_v4,"Baseline PNG pipeline v4 — improved normalization",30,0.8039,"AUC=0.804 — strong baseline with proper normalization"
+36,~2026-03-29,W3,train_physio_png.py,physio_png_stage1,"Stage 1 training — first attempt",0,,"Failed or incomplete (no epoch data)"
+37,~2026-03-29,W3,train_physio_png.py,physio_png_stage1_1 (attempt 1),"Stage 1.1 — first attempt",0,,"Failed or incomplete"
+38,~2026-03-29,W3,train_physio_png.py,physio_png_stage1_1 (attempt 2),"Stage 1.1 — second attempt; completed",13,0.7432,AUC=0.743
+39,~2026-03-30,W3,train_physio_png.py,physio_png_stage1_v2,"Stage 1 v2 — improved",20,0.7487,AUC=0.749
+40,~2026-03-30,W3,train_physio_png.py,physio_directpool_v9,"Direct pooling approach v9; 30 epochs",30,0.7722,"AUC peak 0.7722@ep8; final_best=0.7437; last=0.6576@ep30; 647.7 min; Trackio SSE (conversation)"
+41,~2026-04-01,W3,train_physio_png.py,physio_mean_v1,"Mean pooling; backbone unfrozen from start; lr_backbone=5e-5",20,0.7606,"AUC peak 0.7606@ep15; last=0.6697@ep20; 500.5 min; Trackio SSE (conversation)"
+42,~2026-04-01,W3,train_physio_png.py,physio_mean_frozen_v1,"Mean pooling; backbone frozen (freeze_epochs=999)",20,0.7409,AUC=0.741 — frozen backbone slightly worse
+43,~2026-04-01,W3,train_physio_png.py,physio_mean_frozen_v2,"Mean pooling; frozen backbone v2 — tweaked hyperparams",20,0.7569,AUC=0.757
+44,~2026-04-02,W3,train_physio_png.py,physio_rppg_v10 (NEW_FOUND session),"rPPG fusion v10 (early session run); ep=20 clip=16 bs=6 mean pool",4,0.6735,"AUC peak 0.6735@ep3; Trackio SSE interrupted (NEW_FOUND #18)"
+45,~2026-04-02,W3,train_physio_png.py,physio_rppg_v10 (attempt 1),"rPPG fusion v10 — first full attempt; frozen backbone; mean pool",20,0.7652,"AUC peak 0.7652@ep3; final_best=0.7223; last=0.6599@ep20; 439.5 min (conversation)"
+46,~2026-04-02,W3,train_physio_png.py,rppg_diag,"rPPG diagnostic run — 1 epoch sanity check",1,0.6871,"AUC=0.6871@ep1; 25 min; confirmed rPPG fusion head works (conversation)"
+47,~2026-04-02,W3,train_physio_png.py,physio_rppg_v10 (attempt 2),"rPPG fusion v10 — second run; final verified result",20,0.7223,"final_best=0.7223; confirms v10 is below v13 (conversation)"
+48,~2026-04-02,W3,train_physio_png.py,physio_rppg_v11,"rPPG fusion v11; ep=20 clip=16 bs=6 mean pool; Trackio SSE",7,0.7613,"AUC peak 0.7613@ep5; last=0.6515@ep7; Trackio SSE interrupted at ep7 (NEW_FOUND #3)"
+49,~2026-04-03,W3,train_physio_png.py,physio_rppg_v12,"rPPG fusion v12 — continued tuning",20,0.7609,"AUC peak 0.7609@ep13; final_best=0.7215; last=0.6423@ep20; 464.8 min (conversation)"
+50,~2026-04-04,W3,train_physio_png.py,physio_rppg_v13,"★ BEST MODEL — rPPG fusion v13; frozen backbone; mean pool",13,0.7777,"AUC peak 0.7777@ep13; final_best=0.7021 (overfitting after); 671.2 min; saved as v13-best-chkpnt on Kaggle Models"
+51,~2026-04-05,W3,train_physio_png.py,physio_rppg_v14,"rPPG fusion v14; ep=20 clip=16 bs=8 mean pool; Trackio SSE",5,0.7379,"AUC peak 0.7379@ep3; Trackio SSE interrupted; did not beat v13 (NEW_FOUND #9)"
+52,~2026-04-05,W3,extract_rppg_v2_mp4.py,rppg_v2_extract_1,"rPPG v2 extraction (mp4 videos) — first batch",0,,"Extracted rPPG v2 features (12-d) for CelebDF/DFDC"
+53,~2026-04-05,W3,extract_rppg_v2_mp4.py,rppg_v2_extract_2,"rPPG v2 extraction — second batch (3000 videos)",0,,"rPPG v2 cache for cross-dataset eval"
+54,~2026-04-05,W3,extract_rppg_png.py,rppg_png_extract,"rPPG extraction for PNG frames",0,,"rPPG cache from PNG frame folders"
+55,~2026-04-06,W3,train_physio_png.py,physio_v14_rppg_motion,"v14 with rPPG + motion features; 16 epochs",16,0.7670,"AUC peak 0.7670@ep6; last=0.7121@ep16 (conversation); worse than v13"
+56,~2026-04-07,W3,train_physio_png.py,physio_v15_regularized (attempt 1),"v15 regularized; ep=30 clip=16 bs=6; Trackio SSE",0,,"No val_auc logged (NEW_FOUND #4; conversation attempts ×3)"
+57,~2026-04-07,W3,train_physio_png.py,physio_v15_regularized (attempt 2),"v15 regularized — session run partial",6,0.6026,"AUC peak 0.6026@ep4; last=0.6014@ep6 (conversation)"
+58,~2026-04-07,W3,train_physio_png.py,physio_v15_regularized (full),"v15 regularized — full 20-epoch run",20,0.6122,"AUC peak 0.6122@ep11; final_best=0.6085; 553.6 min; regularization too aggressive"
+59,~2026-04-07,W3,train_physio_png.py,physio_v16_balanced,"v16 with balanced sampling; 15 epochs",15,0.6069,"AUC peak 0.6069@ep5; final_best=0.6024; last=0.5848@ep15; 400.9 min; balanced sampling hurt (conversation)"
+60,~2026-04-07,W3,train_physio_png.py,physio_v17_resume_v13,"v17 — resume from v13 checkpoint; fine-tune",11,0.7727,"AUC=0.773 — close to v13 but not better; final_best=0.7727 (conversation)"
+61,~2026-04-08,W3,train_physio_png.py,physio_v18_gentle_finetune,"v18 — gentle fine-tune from v13",11,0.7727,"AUC peak 0.7727@ep1; last=0.7166@ep11; 277.5 min; confirms v13 is optimal (conversation)"
+62,~2026-04-08,W3,train_physio_png.py,physio_v18b_matched_fusion,"v18b — matched fusion architecture; 21 epochs",21,0.7599,"AUC peak 0.7599@ep13; final_best=0.6991; last=0.7232@ep21; 533.3 min; Trackio SSE (conversation)"
+63,~2026-04-09,W3,extract_rppg_v2_mp4.py,rppg_v2_extract_3,"rPPG v2 mp4 extraction — third batch for cross-dataset",0,,"rPPG v2 features for remaining videos"
+64,~2026-04-09,W3,extract_rppg_v2_png.py,rppg_v2_png_extract_1to4,"rPPG v2 PNG extraction — 4 batches",0,,"4 separate extraction runs (rows collapsed)"
+65,~2026-04-09,W3,extract_rppg_v2_mp4.py,rppg_v2_extract_4,"rPPG v2 mp4 extraction — batch 4 (3000 videos)",0,,
+66,~2026-04-10,W3,extract_blinks_mp4.py,blink_extract_1to3,"Blink extraction from mp4 videos — 3 batches (2000+3000+2000 videos)",0,,"Blink cache for cross-dataset eval"
+67,~2026-04-10,W3,train_physio_png.py,physio_v19_v14_plus_aug,"v19 — v14 architecture with augmentations; 11 epochs",11,0.7686,"AUC peak 0.7686@ep1; last=0.6916@ep11; 296.1 min (conversation)"
+68,~2026-04-11,W3,linear_probe.py,linear_probe_v13 (attempt 1),"Linear probe on frozen v13 backbone — Trackio init failed",0,,"Trackio init error; likely incomplete"
+69,~2026-04-11,W3,linear_probe.py,linear_probe_v13 (attempt 2),"Linear probe on frozen v13 backbone — second attempt",0,,"Intermediate attempt"
+70,~2026-04-11,W3,linear_probe.py,linear_probe_v13 (attempt 3),"Linear probe on frozen v13 backbone — third attempt; 15 epochs",15,0.7794,"AUC=0.779 — linear probe matches full model"
+71,~2026-04-11,W3,linear_probe.py,linear_probe_v13 (attempt 4 / dainty-sunset-0),"Linear probe v13 — final run with TTA; run autonamed by Trackio",15,0.7797,"★ AUC=0.7794@ep15 peak; ★ 0.7797 with TTA; backbone features alone sufficient (conversation)"
+72,~2026-04-12,W4,eval_cross_probe.py,cross_eval,"Cross-dataset eval: FF-only probe on CelebDF/DFDC (1602.3s FF extraction)",0,,"FF val=0.7829; CelebDF AUC=0.5736 EER=0.4438 AP=0.8894 ECE=0.0849; DFDC AUC=0.5390 EER=0.4762 (conversation); poor generalization"
+73,~2026-04-12,W4,train_mixed_probe.py,mixed_probe,"Mixed-dataset probe: FF++ + CelebDF + DFDC pooled training; total 10327 train samples (1579 real)",0,,"FF++ 0.8958 (-0.0006); ★ CelebDF 0.7476 (+0.1455); ★ DFDC 0.6570 (+0.1198); BREAKTHROUGH (conversation)"
+74,~2026-04-12,W4,train_mixed_probe_biosig.py,mixed_probe_biosig,"Experiment C/D: Mixed probe + bio-signal ablation (4 variants)",0,,"Best: backbone+rPPG → CelebDF 0.7645 (+0.023); full fusion 0.7558 (+0.015); rPPG helps cross-dataset only when pooled"
+75,~2026-04-13,W5,ablation_runner.py,ablation,"6-variant ablation on v13 backbone; feature extraction 1949.2s",0,,"Full fusion val=0.7800 / test=0.7296 EER=0.3140; backbone dominates; rPPG-only AUC=0.5094; Blink-only AUC=0.5994; FakeCatcher SVM AUC=0.4871 (conversation)"
+76,~2026-04-13,W5,results_table.py,results_tables,"Generate LaTeX + Markdown tables from ablation JSON",0,,"Ablation tables: 7 variants × AUC/EER/AP/ECE; per-manip table: Deepfakes 0.788 / NT 0.695 / FS 0.690 (conversation)"
+77,~2026-04-13,W5,plot_ablation_bars.py,ablation_plots,"Generate ablation bar charts + heatmap (fig2, fig3)",0,,"fig2_ablation_auc.png + fig3_per_manip_heatmap.png (conversation)"
+78,~2026-04-13,W5,plot_blink_timeline.py,blink_timeline_plot,"Blink feature analysis figure (fig4); 500 real + 2500 fake",0,,"fig4_blink_analysis.png (conversation)"
+79,~2026-04-14,W6,compress_test.py,robustness,"Robustness test: clean / JPEG q50/q30/q10 / blur σ=1/2/3 / noise",0,,"Clean AUC=0.7261; JPEG graceful (q50=0.6891, q30=0.6754, q10=0.6398); blur catastrophic (σ=1→0.5229, σ=2→0.4992) (conversation)"
+80,~2026-04-14,W7,calibrate.py,calibration,"Platt scaling calibration on v13 probe",0,,"ECE 0.092→0.040; passes <0.08 target; AUC/EER unchanged after calibration"
+81,~2026-04-14,W8,operating_point.py,operating_point_ff,"Operating point analysis on FF-only probe; FF extraction 1578.9s",0,,"FF val=0.7827; test AUC=0.7279 AP=0.9196; CelebDF AUC=0.5741; DFDC AUC=0.5373; TPR@FPR=10%: FF=0.370, CelebDF=0.152, DFDC=0.161 (conversation)"
+82,~2026-04-14,W8,operating_point_mixed.py,operating_point_mixed,"Operating point analysis: mixed vs FF-only probe",0,,"FF++ ff_only=0.8966 mixed=0.8907; CelebDF ff_only=0.6038 mixed=0.7329 (+0.129); mixed boosts CelebDF TPR@FPR=10% from 0.21→0.38 (+0.17) (conversation)"
+83,~2026-04-14,W8,operating_point_best.py,operating_point_best,"Operating point analysis: backbone_only vs backbone+rppg vs backbone+blink vs full",0,,"★ backbone+rppg: FF=0.8967 CelebDF=0.7636 (best on CelebDF); backbone_only: CelebDF=0.7443; TPR@FPR=10% CelebDF: rppg=0.415 vs only=0.368 (conversation)"
+84,~2026-04-14,W4,ensemble_probes.py,ensemble_probes,"Ensemble of FF-probe + mixed-probe + bio-signal variants",0,,"Ensemble scoring via linear combination of probe outputs (conversation)"
+85,~2026-04-14,W8,eval_all.py,eval_all_1,"Go/No-Go comprehensive evaluation — first run",0,,"2/3 targets not met (AUC<0.90 cross-dataset; EER>10%); ECE passes at 0.040"
+86,~2026-04-14,W8,eval_all.py,eval_all_2,"Go/No-Go evaluation — second run (updated thresholds)",0,,"Comprehensive report generated; Recommendation: emphasize explainability over standalone AUC"
+87,~2026-04-15,W9,plot_robustness.py,robustness_plot,"Robustness degradation figure from W6 JSON",0,,"fig: AUC vs corruption severity"
+88,~2026-04-15,W9,plot_gradcam.py,gradcam_v1,"Grad-CAM — first attempt (broken backprop via pooled.sum())",0,,"Uniform heatmaps — pseudo-score did not give discriminative gradients"
+89,~2026-04-15,W9,plot_gradcam.py,gradcam_v2,"Grad-CAM — probe-guided; routes through trained linear probe logit",0,,"Fakes: neck/jawline attention (blending boundary); Reals: diffuse corner attention (absence of evidence)"
+90,~2026-04-15,W10,package_model.py,package_model,"Package final model (backbone 71MB; 704 tensors + config.json)",0,,"backbone_efficientnet_b4.pt + model_config.json for inference.py"
