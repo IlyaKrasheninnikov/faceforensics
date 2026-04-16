@@ -1,0 +1,62 @@
+{
+  "mixed_backbone_only": {
+    "description": "Backbone only (1792-d)",
+    "per_dataset": {
+      "FF++": {
+        "auc": 0.8947654121783475,
+        "eer": 0.18713489609012,
+        "n": 1200
+      },
+      "CelebDF": {
+        "auc": 0.7411544777062019,
+        "eer": 0.3365643551850448,
+        "n": 1306
+      }
+    }
+  },
+  "mixed_backbone+blink": {
+    "description": "Backbone + Blink (1792+16)",
+    "per_dataset": {
+      "FF++": {
+        "auc": 0.89882419733166,
+        "eer": 0.1791418283955597,
+        "n": 1200
+      },
+      "CelebDF": {
+        "auc": 0.7488998357963875,
+        "eer": 0.3323809523809524,
+        "n": 1306
+      }
+    }
+  },
+  "mixed_backbone+rppg": {
+    "description": "Backbone + rPPG (1792+12)",
+    "per_dataset": {
+      "FF++": {
+        "auc": 0.8949446959397208,
+        "eer": 0.18663439558961945,
+        "n": 1200
+      },
+      "CelebDF": {
+        "auc": 0.764516862447897,
+        "eer": 0.3072476948339017,
+        "n": 1306
+      }
+    }
+  },
+  "mixed_backbone+rppg+blink": {
+    "description": "Full fusion (1792+12+16)",
+    "per_dataset": {
+      "FF++": {
+        "auc": 0.8986947146151127,
+        "eer": 0.1676601975109438,
+        "n": 1200
+      },
+      "CelebDF": {
+        "auc": 0.7557559681697612,
+        "eer": 0.3246608563849943,
+        "n": 1306
+      }
+    }
+  }
+}
