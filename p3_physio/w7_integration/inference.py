@@ -213,12 +213,46 @@ if __name__ == "__main__":
     args = parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    from w2_model.model import PhysioNet
-    # weights_only=False required because checkpoint pickles numpy scalars (config dict)
+    from w2_model.model import PhysioNet, ModelConfig
+    # weights_only=False required because checkpoints pickle numpy scalars
     # and PyTorch 2.6 made weights_only=True the default.
     ckpt = torch.load(args.checkpoint, map_location=device, weights_only=False)
-    model = PhysioNet(ckpt["config"]).to(device)
-    model.load_state_dict(ckpt["model_state_dict"])
+
+    # Checkpoint may be:
+    #  (a) full-fusion dict: {"config": ..., "model_state_dict": ...}
+    #  (b) linear-probe dict: {"model_state_dict": ...} with no config (v13 style)
+    #  (c) bare state_dict (tensors only) — packaged backbone
+    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
+        state = ckpt["model_state_dict"]
+    else:
+        state = ckpt
+
+    if isinstance(ckpt, dict) and "config" in ckpt:
+        cfg = ckpt["config"]
+    else:
+        # Reconstruct default ModelConfig matching v13 (linear-probe, backbone+rppg+blink)
+        print("[inference] No 'config' key in checkpoint — using default v13 ModelConfig")
+        cfg = ModelConfig(
+            backbone="efficientnet_b4",
+            backbone_pretrained=False,
+            temporal_pool="mean",
+            temporal_dim=0,
+            rppg_feature_dim=128,
+            blink_feature_dim=16,
+            use_pulse_head=False,
+            use_blink_head=False,
+        )
+
+    model = PhysioNet(cfg).to(device)
+    # strict=False — v13 is a linear-probe checkpoint so classifier head keys
+    # may differ from a freshly-constructed PhysioNet. Backbone weights load,
+    # fusion/classifier is randomly initialized (demo still produces rPPG/blink
+    # signal metrics; only the learned "score" is not meaningful without the probe).
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing:
+        print(f"[inference] {len(missing)} missing keys (head will be random): {missing[:3]}...")
+    if unexpected:
+        print(f"[inference] {len(unexpected)} unexpected keys ignored: {unexpected[:3]}...")
 
     if args.video:
         result = predict(args.video, model, device, clip_len=args.clip_len, fps=args.fps)
