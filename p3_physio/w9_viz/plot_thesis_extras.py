@@ -111,7 +111,8 @@ def plot_fig7_cross_dataset_evolution(results_dir, out_dir):
     ax.set_xticklabels(datasets, fontsize=12)
     ax.set_ylim(0.45, 1.0)
     ax.axhline(y=0.9, color="red", linestyle="--", alpha=0.4, label="Target AUC 0.90")
-    ax.legend(fontsize=10, loc="upper left")
+    ax.legend(fontsize=10, loc="center left", bbox_to_anchor=(1.02, 0.5),
+              frameon=True, borderaxespad=0.)
     ax.grid(axis="y", alpha=0.3)
 
     plt.tight_layout()
@@ -134,7 +135,7 @@ def plot_fig8_operating_point_heatmap(results_dir, out_dir):
     fpr_levels = ["TPR@FPR=1%", "TPR@FPR=5%", "TPR@FPR=10%", "TPR@FPR=20%"]
     fpr_short = ["FPR=1%", "FPR=5%", "FPR=10%", "FPR=20%"]
 
-    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(16, 5.5))
 
     for idx, (dataset, title_ds) in enumerate([("FF++", "FF++ (in-domain)"),
                                                 ("CelebDF", "CelebDF (cross-dataset)")]):
@@ -167,11 +168,12 @@ def plot_fig8_operating_point_heatmap(results_dir, out_dir):
                                        fill=False, edgecolor=COLORS["green"],
                                        linewidth=2.5))
 
-    fig.colorbar(im, ax=axes, label="True Positive Rate", shrink=0.8, pad=0.02)
     fig.suptitle("Operating Point Analysis — TPR at Fixed FPR Thresholds\n"
                  "Green border = best model (backbone+rPPG, mixed probe)",
                  fontsize=13, fontweight="bold")
-    plt.tight_layout(rect=[0, 0, 0.92, 0.92])
+    plt.tight_layout(rect=[0, 0, 0.9, 0.93])
+    cbar_ax = fig.add_axes([0.92, 0.15, 0.015, 0.65])
+    fig.colorbar(im, cax=cbar_ax, label="True Positive Rate")
 
     for ext in ("png", "pdf"):
         fig.savefig(out_dir / f"fig8_operating_point_heatmap.{ext}",
@@ -207,7 +209,7 @@ def plot_fig9_biosignal_contribution(results_dir, out_dir):
     x = np.arange(len(signals))
     width = 0.35
 
-    fig, ax = plt.subplots(figsize=(9, 5.5))
+    fig, ax = plt.subplots(figsize=(11, 6.5))
 
     bars1 = ax.bar(x - width / 2, [d * 100 for d in ff_deltas], width,
                    label="FF-only probe (on FF++ test)", color=COLORS["grey"],
@@ -230,18 +232,25 @@ def plot_fig9_biosignal_contribution(results_dir, out_dir):
     ax.set_ylabel("AUC Delta (percentage points)", fontsize=12)
     ax.set_title("Bio-Signal Contribution: FF-Only Probe vs Mixed Probe\n"
                  "Signals become useful only under cross-dataset conditions",
-                 fontsize=13, fontweight="bold")
+                 fontsize=13, fontweight="bold", pad=15)
     ax.set_xticks(x)
     ax.set_xticklabels(signals, fontsize=12)
-    ax.legend(fontsize=10, loc="upper left")
+
+    # Give headroom so title/legend don't collide with bars
+    y_max = max(max(ff_deltas), max(cdf_deltas)) * 100
+    y_min = min(min(ff_deltas), min(cdf_deltas)) * 100
+    ax.set_ylim(y_min - 2, y_max + 4.5)
+
+    ax.legend(fontsize=10, loc="center left", bbox_to_anchor=(1.02, 0.5),
+              frameon=True, borderaxespad=0.)
     ax.grid(axis="y", alpha=0.3)
 
-    # Annotation box
+    # Annotation box — push to the right, clear of the bars
     ax.annotate("rPPG: useless on FF++\nbut +2.3% on CelebDF\nwith mixed probe!",
                 xy=(0 + width / 2, cdf_deltas[0] * 100),
-                xytext=(1.2, cdf_deltas[0] * 100 + 1.5),
+                xytext=(1.35, y_max + 1.8),
                 fontsize=9, color=COLORS["dark"],
-                bbox=dict(boxstyle="round,pad=0.3", facecolor="#E8F5E9", alpha=0.8),
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="#E8F5E9", alpha=0.85),
                 arrowprops=dict(arrowstyle="->", color=COLORS["green"]))
 
     plt.tight_layout()
