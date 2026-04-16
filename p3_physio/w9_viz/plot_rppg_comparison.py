@@ -28,20 +28,61 @@ from w1_setup.extract_rppg import get_face_roi_signals, chrom_method, pos_method
 
 
 def load_frames(video_path, n_frames=150, fps_target=15.0):
-    cap = cv2.VideoCapture(video_path)
-    orig_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    step = max(1, round(orig_fps / fps_target))
+    """Load frames from either a video file (mp4/avi) or a directory of images."""
+    p = Path(video_path)
     frames = []
-    idx = 0
-    while len(frames) < n_frames:
-        ret, f = cap.read()
-        if not ret: break
-        if idx % step == 0:
-            f = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
-            f = cv2.resize(f, (224, 224))
-            frames.append(f.astype(np.float32) / 255.0)
-        idx += 1
-    cap.release()
+
+    if p.is_dir():
+        # Directory of pre-extracted frames (common on Kaggle FF++ processed sets)
+        exts = ("*.jpg", "*.jpeg", "*.png", "*.bmp")
+        files = []
+        for e in exts:
+            files.extend(sorted(p.glob(e)))
+        if not files:
+            # Try one level deeper
+            for e in exts:
+                files.extend(sorted(p.glob(f"*/{e}")))
+        files = sorted(files)[:n_frames]
+        if not files:
+            raise RuntimeError(f"No image frames found in directory: {video_path}")
+        for fp in files:
+            img = cv2.imread(str(fp))
+            if img is None:
+                continue
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            img = cv2.resize(img, (224, 224))
+            frames.append(img.astype(np.float32) / 255.0)
+    else:
+        if not p.exists():
+            raise FileNotFoundError(f"Video path does not exist: {video_path}")
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            cap.release()
+            raise RuntimeError(
+                f"OpenCV could not open: {video_path}\n"
+                f"  Hint: On Kaggle, FF++ 'processed' datasets usually contain\n"
+                f"        pre-extracted frame folders (not .mp4). Pass the folder\n"
+                f"        path directly (e.g. .../videos/000/) instead of an .mp4."
+            )
+        orig_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        step = max(1, round(orig_fps / fps_target))
+        idx = 0
+        while len(frames) < n_frames:
+            ret, f = cap.read()
+            if not ret:
+                break
+            if idx % step == 0:
+                f = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
+                f = cv2.resize(f, (224, 224))
+                frames.append(f.astype(np.float32) / 255.0)
+            idx += 1
+        cap.release()
+        if not frames:
+            raise RuntimeError(
+                f"Opened {video_path} but read 0 frames. "
+                f"Codec may be unsupported; try extracting frames first or "
+                f"pass a frame-folder path."
+            )
     return np.stack(frames)
 
 
