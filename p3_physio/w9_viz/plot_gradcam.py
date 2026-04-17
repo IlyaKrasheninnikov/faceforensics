@@ -322,7 +322,11 @@ def main(args):
     n_fake = len(samples["fake"])
     n_cols = max(n_real, n_fake)
 
-    fig, axes = plt.subplots(2, n_cols, figsize=(4.2 * n_cols, 9))
+    # Увеличиваем высоту фигуры для размещения заголовков
+    fig, axes = plt.subplots(2, n_cols, figsize=(4.2 * n_cols, 10))
+    
+    # Добавляем отступ для suptitle
+    fig.subplots_adjust(top=0.88, bottom=0.08, hspace=0.3)
 
     # Real row — show what backbone sees as "real-like" regions
     for i, fpath in enumerate(samples["real"]):
@@ -336,7 +340,7 @@ def main(args):
         ax = axes[0, i] if n_cols > 1 else axes[0]
         ax.imshow(overlay)
         ax.set_title(f"Real #{i+1}\nP(fake)={prob[0]:.2f}",
-                     fontweight="bold", color="#2196F3", fontsize=11)
+                     fontweight="bold", color="#2196F3", fontsize=11, pad=10)
         ax.axis("off")
 
     # Fake row — show which regions trigger the fake detection
@@ -351,7 +355,7 @@ def main(args):
         ax = axes[1, i] if n_cols > 1 else axes[1]
         ax.imshow(overlay)
         ax.set_title(f"Fake ({manip})\nP(fake)={prob[0]:.2f}",
-                     fontweight="bold", color="#F44336", fontsize=11)
+                     fontweight="bold", color="#F44336", fontsize=11, pad=10)
         ax.axis("off")
 
     # Hide empty axes
@@ -361,16 +365,19 @@ def main(args):
             ax = axes[row, i] if n_cols > 1 else axes[row]
             ax.axis("off")
 
+    # Основной заголовок с явным позиционированием
     fig.suptitle("P3: Probe-Guided Grad-CAM — Regions Driving Fake Detection",
-                 fontsize=15, fontweight="bold", y=0.98)
-    fig.text(0.5, 0.01,
+                 fontsize=15, fontweight="bold", y=0.96)
+    
+    # Подпись внизу
+    fig.text(0.5, 0.02,
              "Heatmap shows spatial regions most influential for the deepfake classification decision.\n"
              "Guided by trained linear probe on frozen EfficientNet-B4 backbone features.",
              ha='center', fontsize=9, color='gray', style='italic')
-    plt.tight_layout(rect=[0, 0.04, 1, 0.96])
 
+    # Сохраняем с явным bbox_inches='tight' для обрезки пустых краев
     for ext in ("png", "pdf"):
-        fig.savefig(out_dir / f"fig5_gradcam.{ext}", dpi=200, bbox_inches="tight")
+        fig.savefig(out_dir / f"fig5_gradcam.{ext}", dpi=200, bbox_inches="tight", pad_inches=0.1)
     plt.close()
     print(f"\nSaved: {out_dir / 'fig5_gradcam.png'}")
 
