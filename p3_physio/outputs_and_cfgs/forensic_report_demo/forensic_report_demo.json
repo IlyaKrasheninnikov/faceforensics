@@ -1,0 +1,13 @@
+{
+  "video": "/kaggle/input/datasets/xdxd003/ff-c23/FaceForensics++_C23/Deepfakes/000_003.mp4",
+  "score": 0.2417,
+  "is_fake": false,
+  "confidence": "medium",
+  "pulse_anomaly": false,
+  "blink_anomaly": true,
+  "mean_bpm": 84.4,
+  "blinks_per_min": 77.3,
+  "rppg_snr_db": 27.6,
+  "processing_time_ms": 11165.1,
+  "warnings": []
+}
