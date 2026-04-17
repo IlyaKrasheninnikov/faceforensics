@@ -89,3 +89,6 @@ order,date,week,script,run_name,description,epochs,best_val_auc,key_result
 88,~2026-04-15,W9,plot_gradcam.py,gradcam_v1,"Grad-CAM — first attempt (broken backprop via pooled.sum())",0,,"Uniform heatmaps — pseudo-score did not give discriminative gradients"
 89,~2026-04-15,W9,plot_gradcam.py,gradcam_v2,"Grad-CAM — probe-guided; routes through trained linear probe logit",0,,"Fakes: neck/jawline attention (blending boundary); Reals: diffuse corner attention (absence of evidence)"
 90,~2026-04-15,W10,package_model.py,package_model,"Package final model (backbone 71MB; 704 tensors + config.json)",0,,"backbone_efficientnet_b4.pt + model_config.json for inference.py"
+91,2026-04-16,W9,plot_thesis_extras.py,thesis_extras_v1,"Generate fig7-fig14 from local JSON results (Kaggle)",0,,"8 figures saved; CPU-only ~1 min; fig7 legend/fig8 colorbar/fig9 layout fixed in v2"
+92,2026-04-16,W9,plot_rppg_comparison.py,rppg_comparison_v1,"Fig1 rPPG waveform/FFT comparison (real vs fake; xdxd003/ff-c23 dataset)",0,,"Raw MP4 pair 000.mp4 / Deepfakes/000_003.mp4; MediaPipe ROI + CHROM; ~30s runtime"
+93,2026-04-16,W7,inference.py,inference_demo,"Forensic report demo on Deepfakes/000_003.mp4 using v13 checkpoint",0,,"rPPG SNR 27.6 dB 84.4 BPM OK; blink rate 77.3/min ANOMALY; score=0.242 (random head); 11.2s"
