@@ -1,7 +1,7 @@
 """
 E1 + E2: Multi-seed linear probe + bootstrap CIs + paired significance tests.
 
-Closes professor's feedback gaps G1 (multiple seeds), G2 (DeLong/McNemar paired
+Closes gaps G1 (multiple seeds), G2 (DeLong/McNemar paired
 tests) and G3 (bootstrap CIs on every headline number).
 
 Two-stage design:
