@@ -145,17 +145,39 @@ SCANNERS = {"celebdf": scan_celebdf, "dfdc": scan_dfdc, "ff": scan_ff}
 # ───────────────────────────────────────────────────────────────────────────
 
 def _load_frames_for_rppg(frame_paths, max_frames):
-    """Load up to max_frames uniformly sampled RGB frames at native resolution."""
+    """
+    Load up to max_frames uniformly sampled RGB frames.
+
+    CelebDF clips have variable per-frame resolution, so we can't blindly
+    np.stack.  We use the first-loaded frame as the reference size; later
+    frames are resized to match.  If the reference is smaller than 256 px
+    on either axis, the whole clip is upscaled to 256x256 so the cheek
+    ROIs are large enough for rPPG (per extract_rppg_v2_png notes, cheek
+    needs >~100 px wide).
+    """
     if len(frame_paths) > max_frames:
         idxs = np.linspace(0, len(frame_paths) - 1, max_frames).astype(int)
         frame_paths = [frame_paths[i] for i in idxs]
+
     frames = []
+    target_hw = None
     for f in frame_paths:
         img = cv2.imread(str(f))
         if img is None:
             continue
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        if target_hw is None:
+            H, W = img.shape[:2]
+            # Upscale small crops so cheek ROI has enough pixels
+            if min(H, W) < 200:
+                target_hw = (max(256, H), max(256, W))
+            else:
+                target_hw = (H, W)
+        Ht, Wt = target_hw
+        if img.shape[:2] != target_hw:
+            img = cv2.resize(img, (Wt, Ht))
         frames.append(img.astype(np.float32) / 255.0)
+
     if len(frames) < 8:
         return None
     return np.stack(frames, axis=0)  # (T, H, W, 3)
@@ -417,7 +439,32 @@ def _blink_feature_vec(stats):
     return np.nan_to_num(feat, nan=0.0, posinf=1.0, neginf=0.0)
 
 
+def _cleanup_mediapipe():
+    """Best-effort teardown to silence the harmless __del__ traceback."""
+    try:
+        lm = _MP_CACHE.get("landmarker")
+        if lm is not None:
+            try:
+                lm.close()
+            except Exception:
+                pass
+            _MP_CACHE["landmarker"] = None
+        fm = _MP_CACHE.get("face_mesh")
+        if fm is not None:
+            try:
+                fm.close()
+            except Exception:
+                pass
+            _MP_CACHE["face_mesh"] = None
+        _MP_CACHE["backend"] = None
+    except Exception:
+        pass
+
+
 def _blink_worker(task):
+    import atexit
+    atexit.register(_cleanup_mediapipe)  # silence __del__ traceback at worker exit
+
     vid_id, class_name, frame_paths, out_dir, fps, max_frames, force = task
 
     save_dir = Path(out_dir) / class_name / vid_id
@@ -528,6 +575,10 @@ def main(args):
     print(f"\n[{args.mode}][{args.dataset}] done: ok={n_ok} cached={n_cached} "
           f"err={n_err} in {elapsed / 60:.1f} min")
     print(f"[{args.mode}][{args.dataset}] wrote caches under {out_dir}")
+
+    # Clean up MediaPipe resources (silences __del__ traceback at interpreter exit)
+    if args.mode == "blink":
+        _cleanup_mediapipe()
 
 
 def build_parser():
