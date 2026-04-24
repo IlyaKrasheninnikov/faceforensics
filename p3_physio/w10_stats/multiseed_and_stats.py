@@ -133,12 +133,23 @@ def do_extract(args):
     print(f"[extract] device={device}")
 
     class ClipDataset(Dataset):
-        def __init__(self, video_dirs, labels, rppg_cache, rppg_dim, blink_cache):
+        """
+        Cache-key functions receive the raw entry from video_dirs (a str path for
+        FF++/CelebDF, a list-of-files for DFDC) and must return (class_name, video_id)
+        — the two subfolders that form <cache_root>/<class>/<video_id>/rppg_v2_feat.npy.
+
+        The default (ff_cache_key) reproduces the FF++ layout used by the original
+        rPPG/blink extractor.
+        """
+
+        def __init__(self, video_dirs, labels, rppg_cache, rppg_dim, blink_cache,
+                     cache_key_fn=None):
             self.labels = labels
             self.rppg_cache = Path(rppg_cache) if rppg_cache else None
             self.rppg_dim = rppg_dim
             self.blink_cache = Path(blink_cache) if blink_cache else None
             self.video_dirs_raw = video_dirs
+            self.cache_key_fn = cache_key_fn or self._ff_cache_key
             self.frame_paths = []
             for vd in video_dirs:
                 if isinstance(vd, list):
@@ -148,6 +159,12 @@ def do_extract(args):
                         os.path.join(vd, f) for f in os.listdir(vd)
                         if f.endswith((".png", ".jpg", ".jpeg"))
                     ))
+
+        @staticmethod
+        def _ff_cache_key(vd_raw):
+            """FF++ layout: <root>/<manip>/<video_id> → (manip, video_id)."""
+            vp = Path(vd_raw)
+            return vp.parent.name, vp.name
 
         def __len__(self):
             return len(self.frame_paths)
@@ -173,20 +190,20 @@ def do_extract(args):
                 clip = np.stack(imgs, axis=0).astype(np.float32) / 255.0
             clip = (clip - IMAGENET_MEAN) / IMAGENET_STD
 
-            rppg_feat = np.zeros(self.rppg_dim, dtype=np.float32)
             vd_raw = self.video_dirs_raw[idx]
-            if self.rppg_cache is not None and isinstance(vd_raw, str):
-                vp = Path(vd_raw)
-                cp = self.rppg_cache / vp.parent.name / vp.name / "rppg_v2_feat.npy"
+            class_name, video_id = self.cache_key_fn(vd_raw)
+
+            rppg_feat = np.zeros(self.rppg_dim, dtype=np.float32)
+            if self.rppg_cache is not None and class_name and video_id:
+                cp = self.rppg_cache / class_name / video_id / "rppg_v2_feat.npy"
                 if cp.exists():
                     loaded = np.load(str(cp)).astype(np.float32)
                     if len(loaded) <= self.rppg_dim:
                         rppg_feat[: len(loaded)] = loaded
 
             blink_feat = np.zeros(16, dtype=np.float32)
-            if self.blink_cache is not None and isinstance(vd_raw, str):
-                vp = Path(vd_raw)
-                bp = self.blink_cache / vp.parent.name / vp.name / "blink_feat.npy"
+            if self.blink_cache is not None and class_name and video_id:
+                bp = self.blink_cache / class_name / video_id / "blink_feat.npy"
                 if bp.exists():
                     loaded = np.load(str(bp)).astype(np.float32)
                     if len(loaded) == 16:
@@ -198,6 +215,27 @@ def do_extract(args):
                 "rppg": torch.from_numpy(rppg_feat),
                 "blink": torch.from_numpy(blink_feat),
             }
+
+    # ── Cache key functions per dataset layout (must match E3 extractor layout) ──
+    def celebdf_cache_key(vd_raw):
+        # vd_raw: .../celebdfv2/crop/<split>/<class>/<video_id>
+        # E3 cache: <cache>/<split>_<class>/<video_id>
+        vp = Path(vd_raw)
+        lname = vp.parent.name       # real/fake
+        split = vp.parent.parent.name  # Train/Test
+        return f"{split}_{lname}", vp.name
+
+    def dfdc_cache_key(vd_raw):
+        # vd_raw: list of flat file paths like .../<split>/<class>/<vid>_<frame>.jpg
+        # E3 cache: <cache>/<split>_<class>/<video_id>
+        if not isinstance(vd_raw, list) or not vd_raw:
+            return None, None
+        first = Path(vd_raw[0])
+        lname = first.parent.name
+        split = first.parent.parent.name
+        stem = first.stem
+        vid_id = stem.rsplit("_", 2)[0] if stem.count("_") >= 2 else stem.split("_")[0]
+        return f"{split}_{lname}", vid_id
 
     cfg = ModelConfig(
         backbone="efficientnet_b4", backbone_pretrained=False,
@@ -220,11 +258,13 @@ def do_extract(args):
     model.eval()
 
     @torch.no_grad()
-    def run_one(dirs, labels, tag, rppg_cache, blink_cache, manips=None, src_ids=None):
+    def run_one(dirs, labels, tag, rppg_cache, blink_cache, manips=None, src_ids=None,
+                cache_key_fn=None):
         if len(dirs) == 0:
             print(f"[extract] {tag}: EMPTY, skipping")
             return
-        ds = ClipDataset(dirs, labels, rppg_cache, args.rppg_dim, blink_cache)
+        ds = ClipDataset(dirs, labels, rppg_cache, args.rppg_dim, blink_cache,
+                         cache_key_fn=cache_key_fn)
         dl = DataLoader(ds, batch_size=args.batch_size, shuffle=False,
                         num_workers=args.num_workers, pin_memory=True)
         bb_list, rppg_list, blink_list, label_list = [], [], [], []
@@ -268,19 +308,23 @@ def do_extract(args):
     run_one(ff_dirs, ff_labels, "ff", args.rppg_cache, args.blink_cache,
             manips=ff_manips, src_ids=ff_src)
 
-    # CelebDF (rPPG/blink default-zero; will be replaced by E3 extraction later)
+    # CelebDF (pass real rPPG/blink caches from E3 if available; otherwise zero-pad)
     if args.celebdf_root:
         print("\n[extract] scanning CelebDF")
         cd_dirs, cd_labels = scan_celebdf(args.celebdf_root)
         print(f"[extract] CelebDF: {len(cd_dirs)} videos")
-        run_one(cd_dirs, cd_labels, "celebdf", args.celebdf_rppg_cache, args.celebdf_blink_cache)
+        run_one(cd_dirs, cd_labels, "celebdf",
+                args.celebdf_rppg_cache, args.celebdf_blink_cache,
+                cache_key_fn=celebdf_cache_key)
 
     # DFDC
     if args.dfdc_faces_root:
         print("\n[extract] scanning DFDC")
         df_dirs, df_labels = scan_dfdc_faces(args.dfdc_faces_root)
         print(f"[extract] DFDC: {len(df_dirs)} groups")
-        run_one(df_dirs, df_labels, "dfdc", args.dfdc_rppg_cache, args.dfdc_blink_cache)
+        run_one(df_dirs, df_labels, "dfdc",
+                args.dfdc_rppg_cache, args.dfdc_blink_cache,
+                cache_key_fn=dfdc_cache_key)
 
     print(f"\n[extract] DONE. Caches in {args.cache_dir}")
 
