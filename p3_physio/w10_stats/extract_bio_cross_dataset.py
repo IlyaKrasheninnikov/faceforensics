@@ -544,26 +544,52 @@ def main(args):
     start = time.time()
     n_ok = n_cached = n_err = 0
 
-    # rPPG workers are stateless and CPU-heavy → ProcessPool
-    # Blink workers load MediaPipe once per process → also ProcessPool, but
-    # the model init cost is per-worker. Keep workers=2-4.
+    # Blink w/ MediaPipe multi-worker on Kaggle 16 GB can OOM-kill one worker
+    # and the BrokenProcessPool kills the whole run. For blink we default to
+    # num_workers=1 and also catch BrokenProcessPool/worker exceptions and
+    # fall back to in-process single-worker mode so partial progress is kept.
+    used_pool = False
     if args.num_workers > 1:
-        with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
-            futures = {pool.submit(worker, t): t for t in tasks}
-            pbar = tqdm(as_completed(futures), total=len(tasks),
-                        desc=f"{args.mode} {args.dataset}")
-            for fut in pbar:
-                r = fut.result()
-                if r["status"] == "ok":
-                    n_ok += 1
-                elif r["status"] == "cached":
-                    n_cached += 1
-                else:
-                    n_err += 1
-                pbar.set_postfix(ok=n_ok, cached=n_cached, err=n_err)
-    else:
-        for t in tqdm(tasks, desc=f"{args.mode} {args.dataset}"):
-            r = worker(t)
+        used_pool = True
+        try:
+            with ProcessPoolExecutor(max_workers=args.num_workers) as pool:
+                futures = {pool.submit(worker, t): t for t in tasks}
+                pbar = tqdm(as_completed(futures), total=len(tasks),
+                            desc=f"{args.mode} {args.dataset}")
+                for fut in pbar:
+                    try:
+                        r = fut.result()
+                    except Exception as e:
+                        # Don't bring down the whole pool for one bad clip
+                        print(f"  [WARN] worker exception: {type(e).__name__}: {e}")
+                        n_err += 1
+                        pbar.set_postfix(ok=n_ok, cached=n_cached, err=n_err)
+                        continue
+                    if r["status"] == "ok":
+                        n_ok += 1
+                    elif r["status"] == "cached":
+                        n_cached += 1
+                    else:
+                        n_err += 1
+                    pbar.set_postfix(ok=n_ok, cached=n_cached, err=n_err)
+        except Exception as e:
+            # ProcessPool was torn down (BrokenProcessPool or similar).  Fall
+            # back to single-worker so any already-cached results are kept
+            # and the remaining clips are processed in-process.
+            print(f"  [WARN] ProcessPool failed ({type(e).__name__}: {e}); "
+                  f"falling back to single-worker in-process mode")
+            # Re-scan output dir so existing feats count as 'cached'
+            args.num_workers = 1
+            used_pool = False
+
+    if not used_pool:
+        for t in tqdm(tasks, desc=f"{args.mode} {args.dataset} (single-worker)"):
+            try:
+                r = worker(t)
+            except Exception as e:
+                print(f"  [WARN] {t[0]}: {type(e).__name__}: {e}")
+                n_err += 1
+                continue
             if r["status"] == "ok":
                 n_ok += 1
             elif r["status"] == "cached":
