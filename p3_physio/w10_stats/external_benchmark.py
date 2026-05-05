@@ -83,7 +83,181 @@ from optional_experiments import (
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# Generic scanner for external benchmarks
+# DF40 JSON-manifest scanner (preferred for DF40 — uses ground-truth labels)
+# ───────────────────────────────────────────────────────────────────────────
+
+# Map JSON path prefixes → on-disk Kaggle dataset prefixes.
+# Order matters: first matching prefix wins.
+DF40_PATH_REWRITES = [
+    ("deepfakes_detection_datasets/DF40/sadtalker/cdf/", "sadtalker_test/cdf/"),
+    ("deepfakes_detection_datasets/DF40/sadtalker/ff/",  "sadtalker_test/ff/"),
+    ("deepfakes_detection_datasets/DF40/simswap/cdf/",   "simswap_test/cdf/"),
+    ("deepfakes_detection_datasets/DF40/simswap/ff/",    "simswap_test/ff/"),
+    ("deepfakes_detection_datasets/Celeb-DF-v2/",        "Celeb-DF-v2/"),
+    ("deepfakes_detection_datasets/FaceForensics++/",    "FaceForensics++/"),
+]
+
+
+def _rewrite_df40_path(p, root):
+    """Map a JSON-stored path to an on-disk path under the Kaggle dataset root."""
+    for src, dst in DF40_PATH_REWRITES:
+        if p.startswith(src):
+            return os.path.join(root, dst + p[len(src):])
+    # Fallback: assume already-relative; just join.
+    return os.path.join(root, p)
+
+
+def scan_df40_json(json_path, dataset_root, split="test", min_frames=8, verbose=True):
+    """
+    Read a DF40 manifest like sadtalker_cdf.json and return per-clip frame lists
+    rebased against `dataset_root`. Filters out clips where < min_frames frames
+    exist on disk.
+
+    Returns (paths, labels, methods, src_ids) — same shape as scan_external().
+      - paths: list-of-frame-paths per clip (sorted by filename)
+      - labels: 0 real / 1 fake (from JSON label field, not folder name)
+      - methods: e.g. "sadtalker_cdf"  (method × source bucket)
+      - src_ids: clip_id from the JSON (e.g. "00170" or "id0_8meWY...")
+    """
+    with open(json_path, "r") as f:
+        manifest = json.load(f)
+    top_keys = list(manifest.keys())
+    if len(top_keys) != 1:
+        raise ValueError(f"Expected one top-level key in {json_path}, got {top_keys}")
+    top = top_keys[0]                      # e.g. "sadtalker_cdf"
+    method_tag = top                       # use as the per-clip "method" identifier
+
+    paths, labels, methods, src_ids = [], [], [], []
+    n_skip_missing = 0
+    n_skip_thin = 0
+
+    for cls_key, clips in manifest[top].items():
+        # cls_key is "sadtalker_Real" or "sadtalker_Fake"
+        if cls_key.endswith("_Real"):
+            label = 0
+        elif cls_key.endswith("_Fake"):
+            label = 1
+        else:
+            if verbose:
+                print(f"  [df40-scan] WARN unknown class key {cls_key}; skipping")
+            continue
+
+        if split not in clips:
+            continue
+        for clip_id, entry in clips[split].items():
+            if not clip_id:                # skip empty placeholder keys
+                continue
+            frame_rel = entry.get("frames", []) if isinstance(entry, dict) else []
+            if not frame_rel:
+                continue
+            frame_abs = [_rewrite_df40_path(fp, dataset_root) for fp in frame_rel]
+            frame_abs = [p for p in frame_abs if os.path.exists(p)]
+            if len(frame_abs) == 0:
+                n_skip_missing += 1
+                continue
+            if len(frame_abs) < min_frames:
+                n_skip_thin += 1
+                continue
+            frame_abs.sort()
+            paths.append(frame_abs)
+            labels.append(label)
+            methods.append(method_tag)
+            src_ids.append(clip_id)
+
+    if verbose:
+        from collections import Counter
+        print(f"  [df40-scan] {json_path}")
+        print(f"    kept={len(paths)} (real={labels.count(0)} fake={labels.count(1)})")
+        print(f"    skipped: all-missing={n_skip_missing} thin(<{min_frames}f)={n_skip_thin}")
+    return paths, labels, methods, src_ids
+
+
+def cmd_probe_df40(args):
+    """Dry-run: load JSON(s), rewrite paths, report on-disk hit rate per source bucket.
+       Useful to catch dataset layout problems before launching extraction."""
+    from collections import defaultdict
+    print(f"[df40-probe] dataset_root={args.dataset_root}")
+    if not os.path.exists(args.dataset_root):
+        print(f"  ERROR: dataset_root not found")
+        return
+    print(f"[df40-probe] expected subdirs:")
+    for sub in ["Celeb-DF-v2", "FaceForensics++",
+                "sadtalker_test", "simswap_test"]:
+        p = os.path.join(args.dataset_root, sub)
+        print(f"    {sub:20s}  exists={os.path.exists(p)}")
+
+    for jp in args.json:
+        with open(jp, "r") as f:
+            manifest = json.load(f)
+        top = list(manifest.keys())[0]
+        n_total, n_hit = 0, 0
+        first_miss = []
+        per_prefix = defaultdict(lambda: [0, 0])  # [hit, total]
+        for cls_key, clips in manifest[top].items():
+            for clip_id, entry in clips.get(args.split, {}).items():
+                if not clip_id:
+                    continue
+                for fp in entry.get("frames", []):
+                    n_total += 1
+                    abs_p = _rewrite_df40_path(fp, args.dataset_root)
+                    pref = fp.split("/")[1] if "/" in fp else fp
+                    if "DF40" in fp:
+                        pref = "/".join(fp.split("/")[1:4])  # DF40/<method>/<source>
+                    per_prefix[pref][1] += 1
+                    if os.path.exists(abs_p):
+                        n_hit += 1
+                        per_prefix[pref][0] += 1
+                    elif len(first_miss) < 3:
+                        first_miss.append((fp, abs_p))
+        print(f"\n[df40-probe] {jp}")
+        print(f"  total frames referenced: {n_total}")
+        print(f"  on-disk hits:            {n_hit}  ({100*n_hit/max(n_total,1):.1f}%)")
+        for pref, (h, t) in sorted(per_prefix.items()):
+            print(f"    {pref:55s}  {h}/{t}  ({100*h/max(t,1):.1f}%)")
+        if first_miss:
+            print(f"  first misses (showing up to 3):")
+            for src, dst in first_miss:
+                print(f"    JSON:  {src}")
+                print(f"    DISK:  {dst}")
+
+
+def cmd_extract_df40(args):
+    """Extract backbone features for DF40 clips listed in one or more JSON manifests."""
+    print(f"[df40-extract] {args.backbone} on {args.dataset_root}")
+    print(f"[df40-extract] manifests: {args.json}")
+
+    all_paths, all_labels, all_methods, all_src_ids = [], [], [], []
+    for jp in args.json:
+        p, l, m, s = scan_df40_json(jp, args.dataset_root,
+                                     split=args.split, min_frames=args.min_frames)
+        all_paths.extend(p); all_labels.extend(l)
+        all_methods.extend(m); all_src_ids.extend(s)
+
+    if not all_paths:
+        print(f"[df40-extract] no clips loaded; check --dataset_root and JSON path rewrites")
+        return
+
+    from collections import Counter
+    print(f"[df40-extract] TOTAL clips: {len(all_paths)}")
+    print(f"[df40-extract] per-method counts: {dict(Counter(all_methods))}")
+    print(f"[df40-extract] real={all_labels.count(0)} fake={all_labels.count(1)}")
+
+    out_npz = str(Path(args.cache_dir) / "external.npz")
+    Path(args.cache_dir).mkdir(parents=True, exist_ok=True)
+    extract_backbone_with_perturbation(
+        args, args.backbone, all_paths, all_labels, PERTURBATIONS["clean"],
+        rppg_cache=None, blink_cache=None,
+        cache_key_fn=external_cache_key,
+        tag="external",
+        out_path=out_npz,
+        manips=all_methods, src_ids=all_src_ids,
+        b4_ckpt=getattr(args, "b4_ckpt", None),
+    )
+    print(f"[df40-extract] DONE. Cache at {out_npz}")
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Generic scanner for external benchmarks (legacy — kept for non-DF40 use)
 # ───────────────────────────────────────────────────────────────────────────
 
 def scan_external(root):
@@ -371,6 +545,29 @@ def build_parser():
     e2.add_argument("--lr", type=float, default=1e-3)
     e2.add_argument("--batch", type=int, default=256)
     e2.add_argument("--n_boot", type=int, default=1000)
+
+    e3 = sub.add_parser("probe_df40",
+        help="Dry-run: load DF40 JSON(s), check on-disk hit rate. No extraction.")
+    e3.add_argument("--dataset_root", required=True,
+        help="Kaggle dataset root, e.g. /kaggle/input/dataset-df40-slice/dataset_df40_2")
+    e3.add_argument("--json", nargs="+", required=True,
+        help="One or more DF40 manifest JSONs (sadtalker_cdf.json, simswap_ff.json, ...)")
+    e3.add_argument("--split", default="test")
+
+    e4 = sub.add_parser("extract_df40",
+        help="Extract backbone features for DF40 clips listed in JSON manifest(s).")
+    e4.add_argument("--backbone",
+        choices=["clip_vitl14", "dinov2_vitb14", "efficientnet_b4_v13"], required=True)
+    e4.add_argument("--b4_ckpt", default=None)
+    e4.add_argument("--dataset_root", required=True)
+    e4.add_argument("--json", nargs="+", required=True)
+    e4.add_argument("--split", default="test")
+    e4.add_argument("--min_frames", type=int, default=8,
+        help="Skip clips with fewer than this many on-disk frames")
+    e4.add_argument("--cache_dir", required=True)
+    e4.add_argument("--clip_len", type=int, default=16)
+    e4.add_argument("--batch_size", type=int, default=4)
+    e4.add_argument("--num_workers", type=int, default=2)
     return p
 
 
@@ -380,3 +577,7 @@ if __name__ == "__main__":
         cmd_extract_external(args)
     elif args.cmd == "eval_external":
         cmd_eval_external(args)
+    elif args.cmd == "probe_df40":
+        cmd_probe_df40(args)
+    elif args.cmd == "extract_df40":
+        cmd_extract_df40(args)
