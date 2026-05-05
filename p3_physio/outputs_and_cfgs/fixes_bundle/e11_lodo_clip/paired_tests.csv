@@ -1,0 +1,13 @@
+config,pair,a,b,auc_a,auc_b,auc_diff,delong_z,delong_p,delong_p_bonf,mc_a_wins,mc_b_wins,mc_chi2,mc_p,mc_p_bonf
+test_celebdf,rppg_vs_bb,backbone_only,backbone+rppg,0.943685,0.943286,-0.000399313,0.681799,0.495366,1,9,3,2.08333,0.148915,1
+test_celebdf,blink_vs_bb,backbone_only,backbone+blink,0.943685,0.943892,0.000207162,-0.411728,0.680539,1,9,4,1.23077,0.267257,1
+test_celebdf,rppg_vs_blink,backbone+rppg,backbone+blink,0.943286,0.943892,0.000606475,-0.738916,0.459958,1,8,8,0.0625,0.802587,1
+test_celebdf,rppg_vs_fusion,backbone+rppg,full_fusion,0.943286,0.94403,0.000744584,-1.34527,0.178538,1,8,8,0.0625,0.802587,1
+test_dfdc,rppg_vs_bb,backbone_only,backbone+rppg,0.656198,0.64876,-0.00743802,0.831599,0.405635,1,4,0,2.25,0.133614,1
+test_dfdc,blink_vs_bb,backbone_only,backbone+blink,0.656198,0.672727,0.0165289,-1.25058,0.211087,1,3,0,1.33333,0.248213,1
+test_dfdc,rppg_vs_blink,backbone+rppg,backbone+blink,0.64876,0.672727,0.0239669,-1.50344,0.132725,1,5,0,3.2,0.0736383,0.883659
+test_dfdc,rppg_vs_fusion,backbone+rppg,full_fusion,0.64876,0.661983,0.0132231,-1.11562,0.264585,1,4,0,2.25,0.133614,1
+test_ff,rppg_vs_bb,backbone_only,backbone+rppg,0.62894,0.61562,-0.01332,1.56694,0.11713,1,54,13,23.8806,1.025e-06,1.23e-05
+test_ff,blink_vs_bb,backbone_only,backbone+blink,0.62894,0.62868,-0.00026,0.11099,0.911624,1,12,0,10.0833,0.00149616,0.017954
+test_ff,rppg_vs_blink,backbone+rppg,backbone+blink,0.61562,0.62868,0.01306,-1.59721,0.11022,1,14,36,8.82,0.00297947,0.0357536
+test_ff,rppg_vs_fusion,backbone+rppg,full_fusion,0.61562,0.61754,0.00192,-1.03239,0.30189,1,9,2,3.27273,0.0704404,0.845285
