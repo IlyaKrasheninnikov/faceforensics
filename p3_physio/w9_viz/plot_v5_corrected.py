@@ -63,27 +63,30 @@ def read_csv(path):
 # Figure 2 — variant ablation under strict LODO with Stouffer p
 # ─────────────────────────────────────────────────────────────────
 def fig2_ablation_v4():
-    rows = read_csv(ROOT / "strict_lodo_bundle/e14_lodo_strict_clip/aggregate.csv")
-    rows = [r for r in rows if r["config"] == "test_celebdf"]
+    """8-seed strict-LODO ablation. Means recomputed from E14 + E15b score arrays."""
+    e14_results = read_csv(ROOT / "strict_lodo_bundle/e14_lodo_strict_clip/results.csv")
+    e15_results = read_csv(ROOT / "e15_bundle/e15_extra_seed_clip/results.csv")
+    all_rows = [r for r in e14_results + e15_results if r["config"] == "test_celebdf"]
+
     order = ["backbone_only", "backbone+rppg", "backbone+blink", "full_fusion"]
     labels = ["Backbone\nonly", "+rPPG", "+Blink", "Full\nfusion"]
     colors = [C_BACKBONE, C_RPPG, C_BLINK, C_FUSION]
 
     aucs = []; stds = []
     for v in order:
-        r = next(x for x in rows if x["variant"] == v)
-        aucs.append(float(r["auc_mean"]))
-        stds.append(float(r["auc_std"]))
+        per_seed = [float(r["auc"]) for r in all_rows if r["variant"] == v]
+        aucs.append(float(np.mean(per_seed)))
+        stds.append(float(np.std(per_seed, ddof=1)))
 
     # Stouffer p across 5 seeds for each variant vs backbone_only
     # (computed from this session's per-seed DeLong recomputation)
-    # E14 strict-LODO Stouffer p (recomputed 2026-05-07 from per-seed DeLong;
-    # positive z = backbone-only better, negative z = variant better)
+    # 8-seed strict-LODO Stouffer p (E14 + E15b, recomputed 2026-05-07
+    # from per-seed DeLong; positive z = backbone-only better)
     stouffer_p = {
         "backbone_only":  None,
-        "backbone+rppg":  0.759,     # z = -0.31, n.s. (rPPG marginally pro-rppg, not significant)
-        "backbone+blink": 0.0022,    # z = +3.07, ** (backbone significantly better than +blink!)
-        "full_fusion":    0.029,     # z = +2.18, * (backbone marginally better than full fusion)
+        "backbone+rppg":  0.00046,   # z = +3.50, *** (bimodal seeds, mean pro-backbone)
+        "backbone+blink": 0.00033,   # z = +3.59, *** (backbone significantly better)
+        "full_fusion":    7e-6,      # z = +4.50, *** (backbone significantly better)
     }
 
     fig, ax = plt.subplots(figsize=(7.5, 5))
@@ -93,9 +96,9 @@ def fig2_ablation_v4():
     ax.set_xticks(x)
     ax.set_xticklabels(labels)
     ax.set_ylim(0.72, 0.78)
-    ax.set_ylabel("AUC (5-seed mean ± std)")
-    ax.set_title("CLIP ViT-L/14 — Strict LODO CelebDF (n = 1758, train FF + DFDC)\n"
-                 "Variant ablation: physiology contribution under cross-dataset evaluation",
+    ax.set_ylabel("AUC (8-seed mean ± std)")
+    ax.set_title("CLIP ViT-L/14 — Strict LODO CelebDF (n = 1758, 8-seed mean ± std)\n"
+                 "Variant ablation: all physiology variants statistically inferior to backbone-only",
                  fontsize=10)
 
     # Annotate AUC values + Stouffer p
@@ -118,8 +121,9 @@ def fig2_ablation_v4():
 
     # Footnote
     fig.text(0.5, -0.02,
-             "Stouffer-combined DeLong p across 5 seeds (probe-init variance only). "
-             "Practical-significance threshold Δ > 0.005 AUC; no variant clears it.",
+             "8-seed Stouffer-combined DeLong p (E14 seeds 0/1/42/1337/2024 + E15b seeds 7/13/99). "
+             "All physiology variants are statistically inferior to backbone-only (p < 0.001) but "
+             "differences fall below the 0.005 practical-significance threshold.",
              ha="center", fontsize=8, style="italic")
 
     plt.tight_layout()
@@ -470,6 +474,101 @@ def fig13_summary_v4():
     print("[OK] fig13_summary_dashboard_v5")
 
 
+def fig15_evidence_matrix_v5():
+    """The central thesis artifact: Δ AUC of full_fusion vs backbone-only,
+    across protocols × backbones. Shows representation-dependent marginal value."""
+    sanity_csv = {
+        "B4":   ROOT / "sanity_bundle/sanity_b4_idsplit/aggregate.csv",
+        "DINO": ROOT / "sanity_bundle/sanity_dinov2_idsplit/aggregate.csv",
+        "CLIP": ROOT / "sanity_bundle/sanity_clip_idsplit/aggregate.csv",
+    }
+    lodo_csv = {
+        "B4":   ROOT / "strict_lodo_bundle/e14_lodo_strict_b4/aggregate.csv",
+        "DINO": ROOT / "strict_lodo_bundle/e14_lodo_strict_dinov2/aggregate.csv",
+        "CLIP": ROOT / "strict_lodo_bundle/e14_lodo_strict_clip/aggregate.csv",
+    }
+    w5 = read_csv(ROOT / "ablation/ablation_results.csv")
+
+    # delta = full_fusion AUC - backbone_only AUC
+    def w5_delta():
+        bb = float(next(x for x in w5 if x["variant"] == "1_backbone_only")["test_auc"])
+        fu = float(next(x for x in w5 if x["variant"] == "4_backbone+rppg+blink")["test_auc"])
+        return fu - bb
+
+    def sanity_delta(key, regime):
+        rows = [x for x in read_csv(sanity_csv[key])
+                if x["regime"] == regime and x["cdf_split"] == "by_subject"]
+        bb = float(next(x for x in rows if x["variant"] == "backbone_only")["auc_mean"])
+        fu = float(next(x for x in rows if x["variant"] == "full_fusion")["auc_mean"])
+        return fu - bb
+
+    def lodo_delta(key):
+        rows = [x for x in read_csv(lodo_csv[key])
+                if x["config"] == "test_celebdf"]
+        bb = float(next(x for x in rows if x["variant"] == "backbone_only")["auc_mean"])
+        fu = float(next(x for x in rows if x["variant"] == "full_fusion")["auc_mean"])
+        return fu - bb
+
+    # 4 protocols (rows) × 3 backbones (cols), with W5 as a separate B4-only entry
+    protocols = ["within-dataset (FF++ test)",
+                 "FF-only → CelebDF (n=1758)",
+                 "mixed-domain held-out id (n=1758)",
+                 "strict LODO CelebDF (n=1758)"]
+    backbones = ["B4 v13", "DINOv2", "CLIP"]
+    M = np.full((4, 3), np.nan)
+    M[0, 0] = w5_delta()                              # W5 only on B4
+    for j, key in enumerate(["B4", "DINO", "CLIP"]):
+        M[1, j] = sanity_delta(key, "ff_only")
+        M[2, j] = sanity_delta(key, "mixed")
+        M[3, j] = lodo_delta(key)
+
+    fig, ax = plt.subplots(figsize=(8.5, 5))
+    # Diverging colormap centered at 0; ±0.005 is the practical-significance threshold
+    vmax = 0.025
+    im = ax.imshow(M, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="auto")
+
+    ax.set_xticks(np.arange(3)); ax.set_xticklabels(backbones, fontsize=10)
+    ax.set_yticks(np.arange(4)); ax.set_yticklabels(protocols, fontsize=9)
+    ax.set_title("Evidence matrix — Δ AUC (full_fusion − backbone-only)\n"
+                 "Negative (blue) = physiology hurts; positive (red) = physiology helps. "
+                 "Practical threshold ±0.005.",
+                 fontsize=10)
+
+    # Annotate each cell
+    for i in range(4):
+        for j in range(3):
+            val = M[i, j]
+            if np.isnan(val):
+                ax.text(j, i, "n/a", ha="center", va="center", color="gray",
+                        fontsize=10, style="italic")
+            else:
+                color = "white" if abs(val) > 0.012 else "black"
+                marker = ""
+                if val >= 0.005:
+                    marker = " ↑"  # physiology helps practically
+                elif val <= -0.005:
+                    marker = " ↓"  # physiology hurts practically
+                ax.text(j, i, f"{val:+.4f}{marker}", ha="center", va="center",
+                        color=color, fontsize=9, fontweight="bold")
+
+    cbar = plt.colorbar(im, ax=ax, fraction=0.04, pad=0.04)
+    cbar.set_label("Δ AUC", rotation=270, labelpad=15)
+    cbar.ax.axhline(0.005, color="black", linewidth=0.5, linestyle=":")
+    cbar.ax.axhline(-0.005, color="black", linewidth=0.5, linestyle=":")
+
+    fig.text(0.5, -0.02,
+             "Pattern: physiology helps low-capacity B4 (Δ ≈ +0.01 to +0.02), is neutral on DINOv2, "
+             "and is at best neutral / slightly negative for CLIP under cross-dataset evaluation. "
+             "Representation-dependent marginal value (see thesis Discussion).",
+             ha="center", fontsize=8, style="italic", wrap=True)
+
+    plt.tight_layout()
+    plt.savefig(OUT / "fig15_evidence_matrix_v5.png", bbox_inches="tight", dpi=200)
+    plt.savefig(OUT / "fig15_evidence_matrix_v5.pdf", bbox_inches="tight")
+    plt.close()
+    print("[OK] fig15_evidence_matrix_v5")
+
+
 if __name__ == "__main__":
     print(f"Output dir: {OUT}")
     fig2_ablation_v4()
@@ -477,4 +576,5 @@ if __name__ == "__main__":
     fig9_biosignal_v4()
     fig12_mixed_probe_tpr_v4()
     fig13_summary_v4()
-    print("\nAll 5 corrected figures regenerated.")
+    fig15_evidence_matrix_v5()
+    print("\nAll 6 corrected figures regenerated.")
