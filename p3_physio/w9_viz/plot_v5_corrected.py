@@ -569,6 +569,91 @@ def fig15_evidence_matrix_v5():
     print("[OK] fig15_evidence_matrix_v5")
 
 
+def fig16_e16_quality_and_errors():
+    """Two-panel figure summarising E16: (A) stratified AUC by SNR quartile,
+    (B) error-conditional rescue/regression counts per variant."""
+    e16_dir = ROOT / "e16_physio_quality_clip"
+    if not e16_dir.exists():
+        print("[skip] fig16: e16 bundle not found")
+        return
+
+    fig, (axA, axB) = plt.subplots(1, 2, figsize=(13, 5))
+
+    # Panel A: stratified AUC bars
+    strat_rows = read_csv(e16_dir / "stratified_auc.csv")
+    strata = ["ALL", "rppg_snr_high", "rppg_snr_low"]
+    strata_labels = ["ALL\n(n=1758)", "high SNR\n(top Q, n=440)",
+                     "low SNR\n(bot Q, n=440)"]
+    variants = ["backbone_only", "backbone+rppg", "backbone+blink", "full_fusion"]
+    var_labels = ["Backbone", "+rPPG", "+Blink", "Fusion"]
+    var_colors = [C_BACKBONE, C_RPPG, C_BLINK, C_FUSION]
+
+    x = np.arange(len(strata))
+    w = 0.18
+    for i, (v, lbl, col) in enumerate(zip(variants, var_labels, var_colors)):
+        means = []
+        stds = []
+        for s in strata:
+            r = next(x for x in strat_rows if x["stratum"] == s)
+            means.append(float(r[f"{v}_mean"]))
+            stds.append(float(r[f"{v}_std"]))
+        axA.bar(x + (i - 1.5) * w, means, w, yerr=stds, label=lbl,
+                color=col, edgecolor="black", linewidth=0.5, capsize=2)
+    axA.set_xticks(x)
+    axA.set_xticklabels(strata_labels, fontsize=9)
+    axA.set_ylabel("AUC (5-seed mean ± std)")
+    axA.set_ylim(0.72, 0.80)
+    axA.set_title("(A) Stratified AUC under strict LODO (CelebDF n=1758)\n"
+                  "Both top and bottom rPPG-SNR quartiles show negative Δ\n"
+                  "→ physiology does not help even at high signal quality",
+                  fontsize=10)
+    axA.legend(loc="lower right", framealpha=0.95, fontsize=8)
+    axA.grid(axis="y", linestyle=":", alpha=0.4)
+
+    # Panel B: error-conditional bars
+    err_rows = read_csv(e16_dir / "error_conditional.csv")
+    err_variants = ["backbone+rppg", "backbone+blink", "full_fusion"]
+    err_labels = ["+rPPG", "+Blink", "Full fusion"]
+    rescues = [float(next(r for r in err_rows if r["variant"] == v)["rescue_mean"])
+               for v in err_variants]
+    regressions = [float(next(r for r in err_rows if r["variant"] == v)["regression_mean"])
+                   for v in err_variants]
+    nets = [r - g for r, g in zip(rescues, regressions)]
+
+    x = np.arange(len(err_variants))
+    w = 0.35
+    axB.bar(x - w/2, rescues, w, label="Rescues (bb wrong → variant right)",
+            color="#2CA02C", edgecolor="black", linewidth=0.5)
+    axB.bar(x + w/2, regressions, w, label="Regressions (bb right → variant wrong)",
+            color="#D62728", edgecolor="black", linewidth=0.5)
+    for i, n in enumerate(nets):
+        sign = "+" if n >= 0 else ""
+        col = "#2CA02C" if n >= 0 else "#D62728"
+        axB.text(i, max(rescues[i], regressions[i]) + 3,
+                 f"net = {sign}{n:.1f}", ha="center", color=col,
+                 fontsize=10, fontweight="bold")
+    axB.set_xticks(x); axB.set_xticklabels(err_labels)
+    axB.set_ylabel("flip count (5-seed mean per 1758 clips)")
+    axB.set_title("(B) Error-conditional analysis under strict LODO\n"
+                  "rPPG alone has positive net; blink and fusion harm threshold decisions",
+                  fontsize=10)
+    axB.legend(loc="upper left", framealpha=0.95, fontsize=8)
+    axB.grid(axis="y", linestyle=":", alpha=0.4)
+    axB.set_ylim(0, 100)
+
+    fig.text(0.5, -0.01,
+             "E16 (2026-05-08, n=1758 strict-LODO CelebDF, 5 seeds). "
+             "100% physiology-extraction coverage; SNR proxy range 5.08–5.83 (narrow). "
+             "Source: outputs_and_cfgs/e16_physio_quality_clip/.",
+             ha="center", fontsize=8, style="italic")
+
+    plt.tight_layout()
+    plt.savefig(OUT / "fig16_e16_quality_and_errors.png", bbox_inches="tight", dpi=200)
+    plt.savefig(OUT / "fig16_e16_quality_and_errors.pdf", bbox_inches="tight")
+    plt.close()
+    print("[OK] fig16_e16_quality_and_errors")
+
+
 if __name__ == "__main__":
     print(f"Output dir: {OUT}")
     fig2_ablation_v4()
@@ -577,4 +662,5 @@ if __name__ == "__main__":
     fig12_mixed_probe_tpr_v4()
     fig13_summary_v4()
     fig15_evidence_matrix_v5()
-    print("\nAll 6 corrected figures regenerated.")
+    fig16_e16_quality_and_errors()
+    print("\nAll 7 corrected figures regenerated.")
