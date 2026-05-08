@@ -1,0 +1,170 @@
+{
+  "n_test": 1758,
+  "rppg_available_pct": 1.0,
+  "blink_available_pct": 1.0,
+  "rppg_snr_median": 5.635077238082886,
+  "stratified_auc_rows": [
+    {
+      "stratum": "ALL",
+      "n": 1758,
+      "n_pos": 1542,
+      "backbone_only_mean": 0.7493436854493922,
+      "backbone+rppg_mean": 0.7485306480280539,
+      "backbone+blink_mean": 0.745501573233415,
+      "full_fusion_mean": 0.7452869049334677,
+      "backbone_only_std": 0.00956555909682721,
+      "backbone+rppg_std": 0.009738081495580845,
+      "backbone+blink_std": 0.00886449775086539,
+      "full_fusion_std": 0.00919764311287719,
+      "delta_fusion_minus_bb": -0.004056780515924507
+    },
+    {
+      "stratum": "rppg_avail",
+      "n": 1758,
+      "n_pos": 1542,
+      "backbone_only_mean": 0.7493436854493922,
+      "backbone+rppg_mean": 0.7485306480280539,
+      "backbone+blink_mean": 0.745501573233415,
+      "full_fusion_mean": 0.7452869049334677,
+      "backbone_only_std": 0.00956555909682721,
+      "backbone+rppg_std": 0.009738081495580845,
+      "backbone+blink_std": 0.00886449775086539,
+      "full_fusion_std": 0.00919764311287719,
+      "delta_fusion_minus_bb": -0.004056780515924507
+    },
+    {
+      "stratum": "blink_avail",
+      "n": 1758,
+      "n_pos": 1542,
+      "backbone_only_mean": 0.7493436854493922,
+      "backbone+rppg_mean": 0.7485306480280539,
+      "backbone+blink_mean": 0.745501573233415,
+      "full_fusion_mean": 0.7452869049334677,
+      "backbone_only_std": 0.00956555909682721,
+      "backbone+rppg_std": 0.009738081495580845,
+      "backbone+blink_std": 0.00886449775086539,
+      "full_fusion_std": 0.00919764311287719,
+      "delta_fusion_minus_bb": -0.004056780515924507
+    },
+    {
+      "stratum": "both_avail",
+      "n": 1758,
+      "n_pos": 1542,
+      "backbone_only_mean": 0.7493436854493922,
+      "backbone+rppg_mean": 0.7485306480280539,
+      "backbone+blink_mean": 0.745501573233415,
+      "full_fusion_mean": 0.7452869049334677,
+      "backbone_only_std": 0.00956555909682721,
+      "backbone+rppg_std": 0.009738081495580845,
+      "backbone+blink_std": 0.00886449775086539,
+      "full_fusion_std": 0.00919764311287719,
+      "delta_fusion_minus_bb": -0.004056780515924507
+    },
+    {
+      "stratum": "rppg_snr_high",
+      "n": 440,
+      "n_pos": 393,
+      "backbone_only_mean": 0.774522224026853,
+      "backbone+rppg_mean": 0.7726598451626874,
+      "backbone+blink_mean": 0.7732878566401385,
+      "full_fusion_mean": 0.7723674949921499,
+      "backbone_only_std": 0.010956973870177994,
+      "backbone+rppg_std": 0.011595047752587514,
+      "backbone+blink_std": 0.011012753378999618,
+      "full_fusion_std": 0.012498272024357762,
+      "delta_fusion_minus_bb": -0.002154729034703151
+    },
+    {
+      "stratum": "rppg_snr_low",
+      "n": 440,
+      "n_pos": 370,
+      "backbone_only_mean": 0.7683552123552123,
+      "backbone+rppg_mean": 0.769034749034749,
+      "backbone+blink_mean": 0.7647027027027027,
+      "full_fusion_mean": 0.7664787644787646,
+      "backbone_only_std": 0.011306631897561346,
+      "backbone+rppg_std": 0.00889326736243658,
+      "backbone+blink_std": 0.010565593150418752,
+      "full_fusion_std": 0.00905195042697437,
+      "delta_fusion_minus_bb": -0.0018764478764476955
+    }
+  ],
+  "error_conditional": [
+    {
+      "variant": "backbone+rppg",
+      "rescue_mean": 36.0,
+      "regression_mean": 29.4,
+      "net_mean": 6.600000000000001,
+      "rescue_pct": 55.04587155879134,
+      "rescues_per_seed": [
+        17,
+        9,
+        31,
+        32,
+        91
+      ],
+      "regressions_per_seed": [
+        61,
+        38,
+        10,
+        25,
+        13
+      ]
+    },
+    {
+      "variant": "backbone+blink",
+      "rescue_mean": 39.6,
+      "regression_mean": 52.8,
+      "net_mean": -13.199999999999996,
+      "rescue_pct": 42.85714285667903,
+      "rescues_per_seed": [
+        16,
+        25,
+        117,
+        15,
+        25
+      ],
+      "regressions_per_seed": [
+        82,
+        53,
+        16,
+        73,
+        40
+      ]
+    },
+    {
+      "variant": "full_fusion",
+      "rescue_mean": 53.4,
+      "regression_mean": 81.0,
+      "net_mean": -27.6,
+      "rescue_pct": 39.73214285684723,
+      "rescues_per_seed": [
+        112,
+        36,
+        54,
+        26,
+        39
+      ],
+      "regressions_per_seed": [
+        32,
+        49,
+        26,
+        220,
+        78
+      ]
+    }
+  ],
+  "seeds": [
+    0,
+    1,
+    42,
+    1337,
+    2024
+  ],
+  "variants": [
+    "backbone_only",
+    "backbone+rppg",
+    "backbone+blink",
+    "full_fusion"
+  ]
+}

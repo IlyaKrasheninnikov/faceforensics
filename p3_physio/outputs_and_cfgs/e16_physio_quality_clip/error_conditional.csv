@@ -1,0 +1,4 @@
+variant,rescue_mean,regression_mean,net_mean,rescue_pct
+backbone+rppg,36.00,29.40,6.60,55.05
+backbone+blink,39.60,52.80,-13.20,42.86
+full_fusion,53.40,81.00,-27.60,39.73
