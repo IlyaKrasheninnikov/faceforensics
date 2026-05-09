@@ -654,6 +654,65 @@ def fig16_e16_quality_and_errors():
     print("[OK] fig16_e16_quality_and_errors")
 
 
+def fig17_e17_crosstab():
+    """E17 cross-tab heatmap: rows = (variant, stratum), cells = net rescue.
+    Diverging colormap: red = harmful, green = helpful."""
+    e17_dir = ROOT / "e17_error_x_quality_clip"
+    if not e17_dir.exists():
+        print("[skip] fig17: e17 bundle not found")
+        return
+    rows = read_csv(e17_dir / "e17_crosstab.csv")
+    variants = ["backbone+rppg", "backbone+blink", "full_fusion"]
+    var_labels = ["+rPPG", "+Blink", "Full fusion"]
+    strata = ["ALL", "rppg_snr_high", "rppg_snr_low",
+              "blink_int_high", "blink_int_low", "real", "fake"]
+    strata_labels = ["ALL\n(n=1758)", "rPPG SNR\nhigh (440)",
+                     "rPPG SNR\nlow (440)", "blink int\nhigh (440)",
+                     "blink int\nlow (440)", "real\nclips (216)",
+                     "fake\nclips (1542)"]
+
+    M = np.zeros((len(variants), len(strata)))
+    annot = np.empty_like(M, dtype=object)
+    for i, v in enumerate(variants):
+        for j, s in enumerate(strata):
+            r = next((x for x in rows if x["variant"] == v and x["stratum"] == s),
+                     None)
+            if r is None:
+                M[i, j] = 0; annot[i, j] = ""
+            else:
+                M[i, j] = float(r["net_mean"])
+                annot[i, j] = (f"net={M[i,j]:+.1f}\n"
+                               f"resc%={float(r['rescue_pct']):.0f}")
+
+    fig, ax = plt.subplots(figsize=(13, 4.5))
+    vmax = max(35, np.max(np.abs(M)))
+    im = ax.imshow(M, cmap="RdYlGn", vmin=-vmax, vmax=vmax, aspect="auto")
+    ax.set_xticks(np.arange(len(strata))); ax.set_xticklabels(strata_labels, fontsize=9)
+    ax.set_yticks(np.arange(len(variants))); ax.set_yticklabels(var_labels, fontsize=10)
+    for i in range(len(variants)):
+        for j in range(len(strata)):
+            color = "white" if abs(M[i, j]) > 18 else "black"
+            ax.text(j, i, annot[i, j], ha="center", va="center",
+                    color=color, fontsize=8, fontweight="bold")
+    cbar = plt.colorbar(im, ax=ax, fraction=0.025, pad=0.02)
+    cbar.set_label("net rescues (5-seed mean)", rotation=270, labelpad=15)
+    ax.set_title("E17 — Error-conditional × physiology-quality cross-tab "
+                 "(strict LODO CelebDF, n=1758)\n"
+                 "Each cell: Δ correct decisions per stratum (rescue − regression). "
+                 "Blink intensity stratum shows sign inversion: blink hurts high-int clips, helps low-int clips.",
+                 fontsize=10)
+    fig.text(0.5, -0.03,
+             "+rPPG: roughly uniform across SNR (rescue % ≈ 51-56%); +Blink: catastrophic on blink_int_high (12%) "
+             "but excellent on blink_int_low (83%) — domain-shift signature, not signal-quality issue. "
+             "Source: outputs_and_cfgs/e17_error_x_quality_clip/e17_crosstab.csv.",
+             ha="center", fontsize=8, style="italic")
+    plt.tight_layout()
+    plt.savefig(OUT / "fig17_e17_crosstab.png", bbox_inches="tight", dpi=200)
+    plt.savefig(OUT / "fig17_e17_crosstab.pdf", bbox_inches="tight")
+    plt.close()
+    print("[OK] fig17_e17_crosstab")
+
+
 if __name__ == "__main__":
     print(f"Output dir: {OUT}")
     fig2_ablation_v4()
@@ -663,4 +722,5 @@ if __name__ == "__main__":
     fig13_summary_v4()
     fig15_evidence_matrix_v5()
     fig16_e16_quality_and_errors()
-    print("\nAll 7 corrected figures regenerated.")
+    fig17_e17_crosstab()
+    print("\nAll 8 corrected figures regenerated.")
