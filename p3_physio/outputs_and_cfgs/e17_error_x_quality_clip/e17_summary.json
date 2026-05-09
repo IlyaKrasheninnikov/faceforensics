@@ -1,0 +1,567 @@
+{
+  "n_test": 1758,
+  "snr_quartiles": {
+    "q1": 5.534975,
+    "q3": 5.69245
+  },
+  "blink_quartiles": {
+    "q1": 0.138325,
+    "q3": 0.346475
+  },
+  "stratum_sizes": {
+    "ALL": 1758,
+    "rppg_snr_high": 440,
+    "rppg_snr_low": 440,
+    "blink_int_high": 440,
+    "blink_int_low": 440,
+    "real": 216,
+    "fake": 1542
+  },
+  "crosstab": [
+    {
+      "variant": "backbone+rppg",
+      "stratum": "ALL",
+      "n_in_stratum": 1758,
+      "rescue_mean": 36.0,
+      "regression_mean": 29.4,
+      "net_mean": 6.600000000000001,
+      "rescue_pct": 55.04587155963302
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "rppg_snr_high",
+      "n_in_stratum": 440,
+      "rescue_mean": 11.6,
+      "regression_mean": 11.0,
+      "net_mean": 0.5999999999999996,
+      "rescue_pct": 51.32743362831858
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "rppg_snr_low",
+      "n_in_stratum": 440,
+      "rescue_mean": 6.4,
+      "regression_mean": 5.0,
+      "net_mean": 1.4000000000000004,
+      "rescue_pct": 56.14035087719298
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "blink_int_high",
+      "n_in_stratum": 440,
+      "rescue_mean": 8.4,
+      "regression_mean": 7.0,
+      "net_mean": 1.4000000000000004,
+      "rescue_pct": 54.54545454545455
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "blink_int_low",
+      "n_in_stratum": 440,
+      "rescue_mean": 9.6,
+      "regression_mean": 7.6,
+      "net_mean": 2.0,
+      "rescue_pct": 55.81395348837209
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "real",
+      "n_in_stratum": 216,
+      "rescue_mean": 4.2,
+      "regression_mean": 5.8,
+      "net_mean": -1.5999999999999996,
+      "rescue_pct": 42.0
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "fake",
+      "n_in_stratum": 1542,
+      "rescue_mean": 31.8,
+      "regression_mean": 23.6,
+      "net_mean": 8.2,
+      "rescue_pct": 57.40072202166064
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "ALL",
+      "n_in_stratum": 1758,
+      "rescue_mean": 39.6,
+      "regression_mean": 52.8,
+      "net_mean": -13.199999999999996,
+      "rescue_pct": 42.857142857142854
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "rppg_snr_high",
+      "n_in_stratum": 440,
+      "rescue_mean": 11.0,
+      "regression_mean": 17.0,
+      "net_mean": -6.0,
+      "rescue_pct": 39.285714285714285
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "rppg_snr_low",
+      "n_in_stratum": 440,
+      "rescue_mean": 9.4,
+      "regression_mean": 9.8,
+      "net_mean": -0.40000000000000036,
+      "rescue_pct": 48.95833333333333
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "blink_int_high",
+      "n_in_stratum": 440,
+      "rescue_mean": 4.6,
+      "regression_mean": 32.6,
+      "net_mean": -28.0,
+      "rescue_pct": 12.36559139784946
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "blink_int_low",
+      "n_in_stratum": 440,
+      "rescue_mean": 14.6,
+      "regression_mean": 3.0,
+      "net_mean": 11.6,
+      "rescue_pct": 82.95454545454545
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "real",
+      "n_in_stratum": 216,
+      "rescue_mean": 6.0,
+      "regression_mean": 5.2,
+      "net_mean": 0.7999999999999998,
+      "rescue_pct": 53.57142857142858
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "fake",
+      "n_in_stratum": 1542,
+      "rescue_mean": 33.6,
+      "regression_mean": 47.6,
+      "net_mean": -14.0,
+      "rescue_pct": 41.37931034482759
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "ALL",
+      "n_in_stratum": 1758,
+      "rescue_mean": 53.4,
+      "regression_mean": 81.0,
+      "net_mean": -27.6,
+      "rescue_pct": 39.732142857142854
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "rppg_snr_high",
+      "n_in_stratum": 440,
+      "rescue_mean": 13.6,
+      "regression_mean": 23.8,
+      "net_mean": -10.200000000000001,
+      "rescue_pct": 36.36363636363637
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "rppg_snr_low",
+      "n_in_stratum": 440,
+      "rescue_mean": 12.2,
+      "regression_mean": 17.0,
+      "net_mean": -4.800000000000001,
+      "rescue_pct": 41.78082191780822
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "blink_int_high",
+      "n_in_stratum": 440,
+      "rescue_mean": 5.8,
+      "regression_mean": 37.8,
+      "net_mean": -31.999999999999996,
+      "rescue_pct": 13.302752293577983
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "blink_int_low",
+      "n_in_stratum": 440,
+      "rescue_mean": 21.4,
+      "regression_mean": 11.6,
+      "net_mean": 9.799999999999999,
+      "rescue_pct": 64.84848484848484
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "real",
+      "n_in_stratum": 216,
+      "rescue_mean": 9.8,
+      "regression_mean": 6.2,
+      "net_mean": 3.6000000000000005,
+      "rescue_pct": 61.25000000000001
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "fake",
+      "n_in_stratum": 1542,
+      "rescue_mean": 43.6,
+      "regression_mean": 74.8,
+      "net_mean": -31.199999999999996,
+      "rescue_pct": 36.82432432432432
+    }
+  ],
+  "detail_per_seed": {
+    "backbone+rppg": {
+      "ALL": {
+        "rescues": [
+          17,
+          9,
+          31,
+          32,
+          91
+        ],
+        "regressions": [
+          61,
+          38,
+          10,
+          25,
+          13
+        ]
+      },
+      "rppg_snr_high": {
+        "rescues": [
+          4,
+          1,
+          14,
+          2,
+          37
+        ],
+        "regressions": [
+          33,
+          6,
+          4,
+          8,
+          4
+        ]
+      },
+      "rppg_snr_low": {
+        "rescues": [
+          6,
+          3,
+          2,
+          10,
+          11
+        ],
+        "regressions": [
+          3,
+          14,
+          0,
+          4,
+          4
+        ]
+      },
+      "blink_int_high": {
+        "rescues": [
+          5,
+          1,
+          5,
+          10,
+          21
+        ],
+        "regressions": [
+          14,
+          13,
+          2,
+          2,
+          4
+        ]
+      },
+      "blink_int_low": {
+        "rescues": [
+          4,
+          2,
+          11,
+          5,
+          26
+        ],
+        "regressions": [
+          16,
+          8,
+          4,
+          8,
+          2
+        ]
+      },
+      "real": {
+        "rescues": [
+          6,
+          9,
+          1,
+          4,
+          1
+        ],
+        "regressions": [
+          4,
+          1,
+          4,
+          9,
+          11
+        ]
+      },
+      "fake": {
+        "rescues": [
+          11,
+          0,
+          30,
+          28,
+          90
+        ],
+        "regressions": [
+          57,
+          37,
+          6,
+          16,
+          2
+        ]
+      }
+    },
+    "backbone+blink": {
+      "ALL": {
+        "rescues": [
+          16,
+          25,
+          117,
+          15,
+          25
+        ],
+        "regressions": [
+          82,
+          53,
+          16,
+          73,
+          40
+        ]
+      },
+      "rppg_snr_high": {
+        "rescues": [
+          7,
+          7,
+          32,
+          6,
+          3
+        ],
+        "regressions": [
+          23,
+          16,
+          7,
+          25,
+          14
+        ]
+      },
+      "rppg_snr_low": {
+        "rescues": [
+          4,
+          5,
+          27,
+          6,
+          5
+        ],
+        "regressions": [
+          16,
+          8,
+          3,
+          13,
+          9
+        ]
+      },
+      "blink_int_high": {
+        "rescues": [
+          6,
+          3,
+          4,
+          5,
+          5
+        ],
+        "regressions": [
+          49,
+          38,
+          1,
+          47,
+          28
+        ]
+      },
+      "blink_int_low": {
+        "rescues": [
+          4,
+          10,
+          46,
+          4,
+          9
+        ],
+        "regressions": [
+          5,
+          2,
+          3,
+          3,
+          2
+        ]
+      },
+      "real": {
+        "rescues": [
+          10,
+          5,
+          0,
+          9,
+          6
+        ],
+        "regressions": [
+          2,
+          3,
+          16,
+          1,
+          4
+        ]
+      },
+      "fake": {
+        "rescues": [
+          6,
+          20,
+          117,
+          6,
+          19
+        ],
+        "regressions": [
+          80,
+          50,
+          0,
+          72,
+          36
+        ]
+      }
+    },
+    "full_fusion": {
+      "ALL": {
+        "rescues": [
+          112,
+          36,
+          54,
+          26,
+          39
+        ],
+        "regressions": [
+          32,
+          49,
+          26,
+          220,
+          78
+        ]
+      },
+      "rppg_snr_high": {
+        "rescues": [
+          14,
+          10,
+          22,
+          9,
+          13
+        ],
+        "regressions": [
+          13,
+          10,
+          3,
+          81,
+          12
+        ]
+      },
+      "rppg_snr_low": {
+        "rescues": [
+          34,
+          5,
+          10,
+          8,
+          4
+        ],
+        "regressions": [
+          8,
+          11,
+          9,
+          31,
+          26
+        ]
+      },
+      "blink_int_high": {
+        "rescues": [
+          7,
+          4,
+          1,
+          11,
+          6
+        ],
+        "regressions": [
+          12,
+          35,
+          18,
+          79,
+          45
+        ]
+      },
+      "blink_int_low": {
+        "rescues": [
+          48,
+          14,
+          29,
+          4,
+          12
+        ],
+        "regressions": [
+          9,
+          2,
+          3,
+          40,
+          4
+        ]
+      },
+      "real": {
+        "rescues": [
+          2,
+          8,
+          2,
+          26,
+          11
+        ],
+        "regressions": [
+          20,
+          5,
+          3,
+          0,
+          3
+        ]
+      },
+      "fake": {
+        "rescues": [
+          110,
+          28,
+          52,
+          0,
+          28
+        ],
+        "regressions": [
+          12,
+          44,
+          23,
+          220,
+          75
+        ]
+      }
+    }
+  },
+  "seeds": [
+    0,
+    1,
+    42,
+    1337,
+    2024
+  ],
+  "variants": [
+    "backbone+rppg",
+    "backbone+blink",
+    "full_fusion"
+  ]
+}
