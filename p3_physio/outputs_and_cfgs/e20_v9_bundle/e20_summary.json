@@ -1,0 +1,648 @@
+{
+  "n_clips": 1758,
+  "n_subjects": 72,
+  "n_boot": 2000,
+  "alpha": 0.05,
+  "seeds": [
+    0,
+    1,
+    42,
+    1337,
+    2024
+  ],
+  "variants": [
+    "backbone+rppg",
+    "backbone+blink",
+    "full_fusion"
+  ],
+  "fpr_levels": [
+    0.01,
+    0.05,
+    0.1
+  ],
+  "paired_cis": [
+    {
+      "variant": "backbone+rppg",
+      "stratum": "ALL",
+      "n_subjects": 72,
+      "mean_delta_auc": -0.0008353339092662841,
+      "ci_lo": -0.0066453700665852836,
+      "ci_hi": 0.0047706334125648415,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "rppg_snr_high_Q",
+      "n_subjects": 21,
+      "mean_delta_auc": -0.0023250212331946173,
+      "ci_lo": -0.01572676189617475,
+      "ci_hi": 0.009415101444214409,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "rppg_snr_low_Q",
+      "n_subjects": 37,
+      "mean_delta_auc": 0.0008188697950210009,
+      "ci_lo": -0.004776931408871728,
+      "ci_hi": 0.0069510132265268075,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "blink_int_high_Q",
+      "n_subjects": 28,
+      "mean_delta_auc": 0.00012165474863511279,
+      "ci_lo": -0.00931523104025055,
+      "ci_hi": 0.010115980764508233,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "blink_int_low_Q",
+      "n_subjects": 35,
+      "mean_delta_auc": -0.0022789614251130345,
+      "ci_lo": -0.013476377171872663,
+      "ci_hi": 0.0076233539386334525,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "ALL",
+      "n_subjects": 72,
+      "mean_delta_auc": -0.003747207313424755,
+      "ci_lo": -0.009164679113522973,
+      "ci_hi": 0.0017119445280729545,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "rppg_snr_high_Q",
+      "n_subjects": 21,
+      "mean_delta_auc": -0.000526742994175089,
+      "ci_lo": -0.013177145108739277,
+      "ci_hi": 0.016584988488772396,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "rppg_snr_low_Q",
+      "n_subjects": 37,
+      "mean_delta_auc": -0.0034582569125797017,
+      "ci_lo": -0.013197662607811734,
+      "ci_hi": 0.006601373455400672,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "blink_int_high_Q",
+      "n_subjects": 28,
+      "mean_delta_auc": -0.005062964261249489,
+      "ci_lo": -0.013513509960938317,
+      "ci_hi": 0.0032745658466281453,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "blink_int_low_Q",
+      "n_subjects": 35,
+      "mean_delta_auc": -0.004560465799891868,
+      "ci_lo": -0.013967584139572853,
+      "ci_hi": 0.006116542485931342,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "ALL",
+      "n_subjects": 72,
+      "mean_delta_auc": -0.0040125525747185115,
+      "ci_lo": -0.012519034633975083,
+      "ci_hi": 0.00431270684186337,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "rppg_snr_high_Q",
+      "n_subjects": 21,
+      "mean_delta_auc": -0.0019841661228641953,
+      "ci_lo": -0.022490146763803905,
+      "ci_hi": 0.018295570579146603,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "rppg_snr_low_Q",
+      "n_subjects": 37,
+      "mean_delta_auc": -0.0015557705543476686,
+      "ci_lo": -0.013629807017189285,
+      "ci_hi": 0.011780615423808394,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "blink_int_high_Q",
+      "n_subjects": 28,
+      "mean_delta_auc": -0.004064396384509967,
+      "ci_lo": -0.01584838690545263,
+      "ci_hi": 0.008553262959358205,
+      "ci_excludes_zero": false
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "blink_int_low_Q",
+      "n_subjects": 35,
+      "mean_delta_auc": -0.004823927666358042,
+      "ci_lo": -0.01909291393832236,
+      "ci_hi": 0.010435953670744824,
+      "ci_excludes_zero": false
+    }
+  ],
+  "threshold_curves": [
+    {
+      "variant": "backbone+rppg",
+      "stratum": "ALL",
+      "fpr_target": 0.01,
+      "rescue_mean": 12.0,
+      "regression_mean": 10.2,
+      "net_mean": 1.8000000000000007,
+      "rescue_pct": 54.054054054054056
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "ALL",
+      "fpr_target": 0.05,
+      "rescue_mean": 25.6,
+      "regression_mean": 18.8,
+      "net_mean": 6.800000000000001,
+      "rescue_pct": 57.65765765765765
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "ALL",
+      "fpr_target": 0.1,
+      "rescue_mean": 22.2,
+      "regression_mean": 30.8,
+      "net_mean": -8.600000000000001,
+      "rescue_pct": 41.886792452830186
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "rppg_snr_high_Q",
+      "fpr_target": 0.01,
+      "rescue_mean": 3.4,
+      "regression_mean": 3.2,
+      "net_mean": 0.19999999999999973,
+      "rescue_pct": 51.515151515151516
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "rppg_snr_high_Q",
+      "fpr_target": 0.05,
+      "rescue_mean": 9.4,
+      "regression_mean": 9.0,
+      "net_mean": 0.40000000000000036,
+      "rescue_pct": 51.08695652173913
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "rppg_snr_high_Q",
+      "fpr_target": 0.1,
+      "rescue_mean": 8.0,
+      "regression_mean": 13.2,
+      "net_mean": -5.199999999999999,
+      "rescue_pct": 37.735849056603776
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "blink_int_high_Q",
+      "fpr_target": 0.01,
+      "rescue_mean": 4.2,
+      "regression_mean": 4.2,
+      "net_mean": 0.0,
+      "rescue_pct": 50.0
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "blink_int_high_Q",
+      "fpr_target": 0.05,
+      "rescue_mean": 8.2,
+      "regression_mean": 5.6,
+      "net_mean": 2.5999999999999996,
+      "rescue_pct": 59.42028985507246
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "blink_int_high_Q",
+      "fpr_target": 0.1,
+      "rescue_mean": 6.2,
+      "regression_mean": 9.2,
+      "net_mean": -2.999999999999999,
+      "rescue_pct": 40.25974025974026
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "blink_int_low_Q",
+      "fpr_target": 0.01,
+      "rescue_mean": 2.4,
+      "regression_mean": 1.4,
+      "net_mean": 1.0,
+      "rescue_pct": 63.15789473684211
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "blink_int_low_Q",
+      "fpr_target": 0.05,
+      "rescue_mean": 5.8,
+      "regression_mean": 3.0,
+      "net_mean": 2.8,
+      "rescue_pct": 65.9090909090909
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "blink_int_low_Q",
+      "fpr_target": 0.1,
+      "rescue_mean": 6.0,
+      "regression_mean": 5.6,
+      "net_mean": 0.40000000000000036,
+      "rescue_pct": 51.724137931034484
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "real",
+      "fpr_target": 0.01,
+      "rescue_mean": 0.2,
+      "regression_mean": 0.2,
+      "net_mean": 0.0,
+      "rescue_pct": 50.0
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "real",
+      "fpr_target": 0.05,
+      "rescue_mean": 0.4,
+      "regression_mean": 0.4,
+      "net_mean": 0.0,
+      "rescue_pct": 50.0
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "real",
+      "fpr_target": 0.1,
+      "rescue_mean": 2.0,
+      "regression_mean": 2.0,
+      "net_mean": 0.0,
+      "rescue_pct": 50.0
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "fake",
+      "fpr_target": 0.01,
+      "rescue_mean": 11.8,
+      "regression_mean": 10.0,
+      "net_mean": 1.8000000000000007,
+      "rescue_pct": 54.12844036697248
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "fake",
+      "fpr_target": 0.05,
+      "rescue_mean": 25.2,
+      "regression_mean": 18.4,
+      "net_mean": 6.800000000000001,
+      "rescue_pct": 57.79816513761469
+    },
+    {
+      "variant": "backbone+rppg",
+      "stratum": "fake",
+      "fpr_target": 0.1,
+      "rescue_mean": 20.2,
+      "regression_mean": 28.8,
+      "net_mean": -8.600000000000001,
+      "rescue_pct": 41.224489795918366
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "ALL",
+      "fpr_target": 0.01,
+      "rescue_mean": 2.8,
+      "regression_mean": 22.0,
+      "net_mean": -19.2,
+      "rescue_pct": 11.29032258064516
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "ALL",
+      "fpr_target": 0.05,
+      "rescue_mean": 22.2,
+      "regression_mean": 20.8,
+      "net_mean": 1.3999999999999986,
+      "rescue_pct": 51.627906976744185
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "ALL",
+      "fpr_target": 0.1,
+      "rescue_mean": 26.4,
+      "regression_mean": 30.2,
+      "net_mean": -3.8000000000000007,
+      "rescue_pct": 46.64310954063605
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "rppg_snr_high_Q",
+      "fpr_target": 0.01,
+      "rescue_mean": 0.4,
+      "regression_mean": 6.0,
+      "net_mean": -5.6,
+      "rescue_pct": 6.25
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "rppg_snr_high_Q",
+      "fpr_target": 0.05,
+      "rescue_mean": 5.0,
+      "regression_mean": 6.4,
+      "net_mean": -1.4000000000000004,
+      "rescue_pct": 43.859649122807014
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "rppg_snr_high_Q",
+      "fpr_target": 0.1,
+      "rescue_mean": 4.6,
+      "regression_mean": 10.2,
+      "net_mean": -5.6,
+      "rescue_pct": 31.08108108108108
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "blink_int_high_Q",
+      "fpr_target": 0.01,
+      "rescue_mean": 0.4,
+      "regression_mean": 14.4,
+      "net_mean": -14.0,
+      "rescue_pct": 2.7027027027027026
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "blink_int_high_Q",
+      "fpr_target": 0.05,
+      "rescue_mean": 0.4,
+      "regression_mean": 15.4,
+      "net_mean": -15.0,
+      "rescue_pct": 2.531645569620253
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "blink_int_high_Q",
+      "fpr_target": 0.1,
+      "rescue_mean": 1.0,
+      "regression_mean": 22.2,
+      "net_mean": -21.2,
+      "rescue_pct": 4.310344827586207
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "blink_int_low_Q",
+      "fpr_target": 0.01,
+      "rescue_mean": 0.4,
+      "regression_mean": 1.4,
+      "net_mean": -0.9999999999999999,
+      "rescue_pct": 22.222222222222225
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "blink_int_low_Q",
+      "fpr_target": 0.05,
+      "rescue_mean": 10.6,
+      "regression_mean": 1.0,
+      "net_mean": 9.6,
+      "rescue_pct": 91.37931034482759
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "blink_int_low_Q",
+      "fpr_target": 0.1,
+      "rescue_mean": 12.4,
+      "regression_mean": 1.0,
+      "net_mean": 11.4,
+      "rescue_pct": 92.53731343283582
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "real",
+      "fpr_target": 0.01,
+      "rescue_mean": 0.4,
+      "regression_mean": 0.4,
+      "net_mean": 0.0,
+      "rescue_pct": 50.0
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "real",
+      "fpr_target": 0.05,
+      "rescue_mean": 1.0,
+      "regression_mean": 1.0,
+      "net_mean": 0.0,
+      "rescue_pct": 50.0
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "real",
+      "fpr_target": 0.1,
+      "rescue_mean": 1.4,
+      "regression_mean": 1.4,
+      "net_mean": 0.0,
+      "rescue_pct": 50.0
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "fake",
+      "fpr_target": 0.01,
+      "rescue_mean": 2.4,
+      "regression_mean": 21.6,
+      "net_mean": -19.200000000000003,
+      "rescue_pct": 10.0
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "fake",
+      "fpr_target": 0.05,
+      "rescue_mean": 21.2,
+      "regression_mean": 19.8,
+      "net_mean": 1.3999999999999986,
+      "rescue_pct": 51.707317073170735
+    },
+    {
+      "variant": "backbone+blink",
+      "stratum": "fake",
+      "fpr_target": 0.1,
+      "rescue_mean": 25.0,
+      "regression_mean": 28.8,
+      "net_mean": -3.8000000000000007,
+      "rescue_pct": 46.46840148698885
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "ALL",
+      "fpr_target": 0.01,
+      "rescue_mean": 7.4,
+      "regression_mean": 26.6,
+      "net_mean": -19.200000000000003,
+      "rescue_pct": 21.764705882352942
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "ALL",
+      "fpr_target": 0.05,
+      "rescue_mean": 24.4,
+      "regression_mean": 35.6,
+      "net_mean": -11.200000000000003,
+      "rescue_pct": 40.666666666666664
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "ALL",
+      "fpr_target": 0.1,
+      "rescue_mean": 30.2,
+      "regression_mean": 49.4,
+      "net_mean": -19.2,
+      "rescue_pct": 37.93969849246231
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "rppg_snr_high_Q",
+      "fpr_target": 0.01,
+      "rescue_mean": 1.8,
+      "regression_mean": 6.2,
+      "net_mean": -4.4,
+      "rescue_pct": 22.5
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "rppg_snr_high_Q",
+      "fpr_target": 0.05,
+      "rescue_mean": 6.8,
+      "regression_mean": 11.6,
+      "net_mean": -4.8,
+      "rescue_pct": 36.95652173913044
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "rppg_snr_high_Q",
+      "fpr_target": 0.1,
+      "rescue_mean": 8.2,
+      "regression_mean": 19.4,
+      "net_mean": -11.2,
+      "rescue_pct": 29.71014492753623
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "blink_int_high_Q",
+      "fpr_target": 0.01,
+      "rescue_mean": 1.0,
+      "regression_mean": 15.2,
+      "net_mean": -14.2,
+      "rescue_pct": 6.172839506172839
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "blink_int_high_Q",
+      "fpr_target": 0.05,
+      "rescue_mean": 0.4,
+      "regression_mean": 21.6,
+      "net_mean": -21.200000000000003,
+      "rescue_pct": 1.8181818181818181
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "blink_int_high_Q",
+      "fpr_target": 0.1,
+      "rescue_mean": 1.6,
+      "regression_mean": 27.0,
+      "net_mean": -25.4,
+      "rescue_pct": 5.594405594405594
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "blink_int_low_Q",
+      "fpr_target": 0.01,
+      "rescue_mean": 3.0,
+      "regression_mean": 2.4,
+      "net_mean": 0.6000000000000001,
+      "rescue_pct": 55.55555555555555
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "blink_int_low_Q",
+      "fpr_target": 0.05,
+      "rescue_mean": 10.2,
+      "regression_mean": 3.0,
+      "net_mean": 7.199999999999999,
+      "rescue_pct": 77.27272727272727
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "blink_int_low_Q",
+      "fpr_target": 0.1,
+      "rescue_mean": 13.6,
+      "regression_mean": 3.6,
+      "net_mean": 10.0,
+      "rescue_pct": 79.06976744186046
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "real",
+      "fpr_target": 0.01,
+      "rescue_mean": 0.6,
+      "regression_mean": 0.6,
+      "net_mean": 0.0,
+      "rescue_pct": 50.0
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "real",
+      "fpr_target": 0.05,
+      "rescue_mean": 0.8,
+      "regression_mean": 0.8,
+      "net_mean": 0.0,
+      "rescue_pct": 50.0
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "real",
+      "fpr_target": 0.1,
+      "rescue_mean": 2.0,
+      "regression_mean": 2.0,
+      "net_mean": 0.0,
+      "rescue_pct": 50.0
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "fake",
+      "fpr_target": 0.01,
+      "rescue_mean": 6.8,
+      "regression_mean": 26.0,
+      "net_mean": -19.2,
+      "rescue_pct": 20.731707317073173
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "fake",
+      "fpr_target": 0.05,
+      "rescue_mean": 23.6,
+      "regression_mean": 34.8,
+      "net_mean": -11.199999999999996,
+      "rescue_pct": 40.41095890410959
+    },
+    {
+      "variant": "full_fusion",
+      "stratum": "fake",
+      "fpr_target": 0.1,
+      "rescue_mean": 28.2,
+      "regression_mean": 47.4,
+      "net_mean": -19.2,
+      "rescue_pct": 37.301587301587304
+    }
+  ]
+}
