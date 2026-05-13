@@ -1,0 +1,13 @@
+variant,family,auc_mean,auc_std,tpr5_mean,tpr5_std
+backbone_only,raw_concat_adamw,0.749344,0.009566,0.237743,0.016320
+backbone_only,zscored_adamw,0.734886,0.014575,0.153696,0.050030
+backbone_only,l2_logistic,0.623048,0.000000,0.141375,0.000000
+backbone+rppg,raw_concat_adamw,0.748531,0.009738,0.237873,0.026658
+backbone+rppg,zscored_adamw,0.732494,0.014158,0.151102,0.055749
+backbone+rppg,l2_logistic,0.623193,0.000000,0.128405,0.000000
+backbone+blink,raw_concat_adamw,0.745502,0.008864,0.234630,0.016657
+backbone+blink,zscored_adamw,0.721676,0.014887,0.149157,0.029093
+backbone+blink,l2_logistic,0.629901,0.000000,0.143320,0.000000
+full_fusion,raw_concat_adamw,0.745287,0.009198,0.231777,0.025801
+full_fusion,zscored_adamw,0.719949,0.014549,0.148379,0.031592
+full_fusion,l2_logistic,0.627325,0.000000,0.148508,0.000000
