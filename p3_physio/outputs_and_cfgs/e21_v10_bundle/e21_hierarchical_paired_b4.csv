@@ -1,0 +1,16 @@
+backbone,variant,stratum,n_subjects,mean_delta_auc,ci_lo,ci_hi,ci_excludes_zero
+B4,backbone+rppg,ALL,72,0.016219,-0.015075,0.050570,False
+B4,backbone+rppg,rppg_snr_high_Q,21,-0.002286,-0.036737,0.028199,False
+B4,backbone+rppg,rppg_snr_low_Q,37,-0.026633,-0.049094,-0.007239,True
+B4,backbone+rppg,blink_int_high_Q,28,-0.004741,-0.045288,0.044120,False
+B4,backbone+rppg,blink_int_low_Q,35,0.019957,-0.024646,0.060418,False
+B4,backbone+blink,ALL,72,0.000798,-0.004123,0.007253,False
+B4,backbone+blink,rppg_snr_high_Q,21,-0.001503,-0.007941,0.005518,False
+B4,backbone+blink,rppg_snr_low_Q,37,0.002279,-0.006685,0.012191,False
+B4,backbone+blink,blink_int_high_Q,28,0.000087,-0.005630,0.006193,False
+B4,backbone+blink,blink_int_low_Q,35,-0.002202,-0.005700,0.001284,False
+B4,full_fusion,ALL,72,0.015533,-0.014478,0.047650,False
+B4,full_fusion,rppg_snr_high_Q,21,-0.002826,-0.035701,0.029583,False
+B4,full_fusion,rppg_snr_low_Q,37,-0.025667,-0.047750,-0.005264,True
+B4,full_fusion,blink_int_high_Q,28,-0.005728,-0.048938,0.043223,False
+B4,full_fusion,blink_int_low_Q,35,0.020609,-0.022898,0.059446,False
