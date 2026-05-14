@@ -378,8 +378,10 @@ def fig13_summary_v4():
                    and x["variant"] == "backbone_only")
     df40_all = next(x for x in df40 if x["variant"] == "backbone_only" and x["method"] == "ALL")
 
-    proto = ["within-dataset\n(FF-only)", "mixed-domain\nheld-out id",
-             "strict LODO\n(cross-dataset)", "external stress\n(DF40 video)"]
+    proto = ["within-dataset\n(FF-only, n=1758)",
+             "mixed-domain\nheld-out id (n=1758)\n[NOT cross-dataset]",
+             "strict LODO\n(cross-dataset)\nn=1758, n_subj=72",
+             "external stress\n(DF40 video, n=2209)\n[backbone-only]"]
     means = [float(ff_only_bb["auc_mean"]), float(mixed_bb["auc_mean"]),
              float(lodo_bb["auc_mean"]),    float(df40_all["auc_mean"])]
     stds  = [float(ff_only_bb["auc_std"]),  float(mixed_bb["auc_std"]),
@@ -393,10 +395,11 @@ def fig13_summary_v4():
     for b, m in zip(bars, means):
         axA.text(b.get_x() + b.get_width() / 2, m + 0.018,
                  f"{m:.3f}", ha="center", va="bottom", fontsize=8)
-    axA.set_xticks(range(4)); axA.set_xticklabels(proto, fontsize=8)
+    axA.set_xticks(range(4)); axA.set_xticklabels(proto, fontsize=7.5)
     axA.set_ylim(0.5, 1.0); axA.axhline(0.5, color="red", linestyle="--", lw=0.6, alpha=0.5)
     axA.set_ylabel("CLIP AUC (backbone-only)")
-    axA.set_title("(A) CLIP across four protocols", fontsize=10)
+    axA.set_title("(A) CLIP across four protocols\n"
+                  "ONLY 'strict LODO' is cross-dataset generalisation", fontsize=9)
     axA.grid(axis="y", linestyle=":", alpha=0.4)
 
     # ── Panel B: CLIP variant ablation under strict LODO ──
@@ -415,8 +418,9 @@ def fig13_summary_v4():
     axB.set_xticks(range(4)); axB.set_xticklabels(labels, fontsize=9)
     axB.set_ylim(0.72, 0.78)
     axB.set_ylabel("AUC")
-    axB.set_title("(B) Strict LODO: physiology contribution (n = 1758)\n"
-                  "Δ ≈ −0.005 (full fusion slightly worse, p=0.029)", fontsize=10)
+    axB.set_title("(B) Strict LODO: physiology contribution (n=1758, n_subjects=72)\n"
+                  "All Δ paired-bootstrap CIs cross zero — physiology does not reliably improve CLIP",
+                  fontsize=9)
     axB.grid(axis="y", linestyle=":", alpha=0.4)
 
     # ── Panel C: DF40 method-stratified ──
@@ -438,40 +442,45 @@ def fig13_summary_v4():
     axC.set_xticks(range(4)); axC.set_xticklabels(bucket_labels, fontsize=8)
     axC.set_ylim(0.3, 1.0)
     axC.set_ylabel("CLIP AUC (backbone-only)")
-    axC.set_title("(C) DF40 external stress test (no physiology — vectors zero-filled)",
-                  fontsize=10)
+    axC.set_title("(C) DF40 external stress test — backbone-only "
+                  "(no physiology: rPPG/blink not extracted on DF40)",
+                  fontsize=9)
     axC.grid(axis="y", linestyle=":", alpha=0.4)
 
-    # ── Panel D: text panel — corrected claims summary ──
+    # ── Panel D: text panel — corrected v10 claims summary ──
     axD = fig.add_subplot(gs[1, 1])
     axD.axis("off")
     text = (
-        r"$\bf{Headline\ findings\ (v5-corrected,\ E14\ strict\ LODO)}$" + "\n\n"
-        r"$\bf{1.}$ CLIP CelebDF AUC = $\bf{0.749 \pm 0.010}$ under strict LODO" + "\n"
-        r"     (n = 1758, train FF + DFDC, CelebDF fully held out)." + "\n"
-        r"     v3/v4 0.941 number was a mixed-domain leak — retracted." + "\n\n"
-        r"$\bf{2.}$ Full fusion = 0.745; Δ = −0.005 vs backbone-only." + "\n"
-        r"     Stouffer p = 0.029 in favour of backbone-only — physiology" + "\n"
-        r"     is at best neutral and slightly negative under strict LODO." + "\n\n"
-        r"$\bf{3.}$ Apples-to-apples vs DeepfakeBench (FF-only → CelebDF):" + "\n"
-        r"     CLIP 0.770 ≈ SPSL 0.7650 (field ceiling) without auxiliary" + "\n"
-        r"     hand-engineered features. Strict LODO 0.749 ≈ Xception 0.7365." + "\n\n"
-        r"$\bf{4.}$ Physiology has $\it{representation\!-\!dependent}$" + "\n"
-        r"     $\it{marginal\ value}$: small residual gains for B4 within-dataset," + "\n"
-        r"     neutral or slightly harmful for CLIP cross-dataset." + "\n\n"
-        r"$\bf{5.}$ DF40 stress test: CLIP 0.746 ALL, but sadtalker_ff" + "\n"
-        r"     0.462 (below chance) — talking-head reanimation" + "\n"
-        r"     fundamentally harder than face-swap."
+        r"$\bf{Headline\ findings\ (v10\ corrected;\ E14/E16/E20/E21)}$" + "\n\n"
+        r"$\bf{1.}$ CLIP CelebDF AUC = $\bf{0.749 \pm 0.010}$ (5-seed)" + "\n"
+        r"     under strict LODO (n=1758 clips, n_subjects=72," + "\n"
+        r"     train FF + DFDC, CelebDF fully held out)." + "\n"
+        r"     Subject-cluster 95% CI [0.690, 0.820]." + "\n\n"
+        r"$\bf{2.}$ 0.941 = mixed-domain held-out identity ONLY." + "\n"
+        r"     NEVER cross-dataset. v3/v4 conflation retracted." + "\n\n"
+        r"$\bf{3.}$ Physiology variants under strict LODO:" + "\n"
+        r"     hierarchical paired bootstrap (E21) — all Δ AUC" + "\n"
+        r"     CIs cross zero. Direction consistently negative" + "\n"
+        r"     (point est −0.001 to −0.005), not significant." + "\n\n"
+        r"$\bf{4.}$ Apples-to-apples vs DeepfakeBench (FF-only → CelebDF):" + "\n"
+        r"     CLIP 0.770 ≈ SPSL 0.7650 (field ceiling)." + "\n"
+        r"     Strict LODO 0.749 ≈ Xception 0.7365." + "\n\n"
+        r"$\bf{5.}$ Diagnostic story (E17/E20):" + "\n"
+        r"     +rPPG fake-rescue at FPR=5% (+6.8 net, diagnostic)." + "\n"
+        r"     +blink domain-shift inversion: 12% rescue rate on" + "\n"
+        r"     blink_int_high; 91% rescue on blink_int_low." + "\n\n"
+        r"$\bf{6.}$ DF40 = backbone-only stress test; sadtalker_ff" + "\n"
+        r"     0.462 (below chance) on talking-head reanimation."
     )
-    axD.text(0, 1, text, va="top", ha="left", fontsize=9, family="sans-serif")
+    axD.text(0, 1, text, va="top", ha="left", fontsize=8, family="sans-serif")
 
-    fig.suptitle("CLIP-based deepfake detection — corrected v5 dashboard (E14 strict LODO)\n"
-                 "Four protocols, n = 1758 subject-aware throughout",
+    fig.suptitle("CLIP-based deepfake detection — v10 corrected dashboard\n"
+                 "Strict LODO source-of-truth: 0.749 ± 0.010 (n_clips=1758, n_subjects=72)",
                  fontsize=11, y=0.995)
-    plt.savefig(OUT / "fig13_summary_dashboard_v5.png", bbox_inches="tight", dpi=200)
-    plt.savefig(OUT / "fig13_summary_dashboard_v5.pdf", bbox_inches="tight")
+    plt.savefig(OUT / "fig13_summary_dashboard_v10.png", bbox_inches="tight", dpi=200)
+    plt.savefig(OUT / "fig13_summary_dashboard_v10.pdf", bbox_inches="tight")
     plt.close()
-    print("[OK] fig13_summary_dashboard_v5")
+    print("[OK] fig13_summary_dashboard_v10")
 
 
 def fig15_evidence_matrix_v5():
@@ -654,6 +663,72 @@ def fig16_e16_quality_and_errors():
     print("[OK] fig16_e16_quality_and_errors")
 
 
+def fig18_e21_b4_vs_clip_paired():
+    """B4 vs CLIP hierarchical paired bootstrap delta AUC, by stratum.
+    Tests whether the B4 direction is statistically different from CLIP.
+    """
+    e21_dir = ROOT / "e21_v10_bundle"
+    if not e21_dir.exists():
+        print("[skip] fig18: e21 bundle not found")
+        return
+    clip_rows = read_csv(e21_dir / "e21_hierarchical_paired_clip.csv")
+    b4_rows   = read_csv(e21_dir / "e21_hierarchical_paired_b4.csv")
+    variants = ["backbone+rppg", "backbone+blink", "full_fusion"]
+    var_labels = ["+rPPG", "+Blink", "Full fusion"]
+    strata = ["ALL", "rppg_snr_high_Q", "rppg_snr_low_Q",
+              "blink_int_high_Q", "blink_int_low_Q"]
+    strata_labels = ["ALL\n(n_subj=72)", "rPPG SNR\nhigh Q (21)",
+                     "rPPG SNR\nlow Q (37)", "blink int\nhigh Q (28)",
+                     "blink int\nlow Q (35)"]
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4.8), sharey=True)
+    for vi, (variant, vlbl, ax) in enumerate(zip(variants, var_labels, axes)):
+        x = np.arange(len(strata))
+        w = 0.35
+        # B4
+        b4_means = []; b4_los = []; b4_his = []
+        clip_means = []; clip_los = []; clip_his = []
+        for s in strata:
+            r_b4 = next(r for r in b4_rows
+                        if r["variant"] == variant and r["stratum"] == s)
+            r_cl = next(r for r in clip_rows
+                        if r["variant"] == variant and r["stratum"] == s)
+            b4_means.append(float(r_b4["mean_delta_auc"]))
+            b4_los.append(float(r_b4["mean_delta_auc"]) - float(r_b4["ci_lo"]))
+            b4_his.append(float(r_b4["ci_hi"]) - float(r_b4["mean_delta_auc"]))
+            clip_means.append(float(r_cl["mean_delta_auc"]))
+            clip_los.append(float(r_cl["mean_delta_auc"]) - float(r_cl["ci_lo"]))
+            clip_his.append(float(r_cl["ci_hi"]) - float(r_cl["mean_delta_auc"]))
+        ax.bar(x - w/2, b4_means, w, yerr=[b4_los, b4_his],
+               label="B4 v13", color=C_B4, edgecolor="black",
+               linewidth=0.5, capsize=3)
+        ax.bar(x + w/2, clip_means, w, yerr=[clip_los, clip_his],
+               label="CLIP ViT-L/14", color=C_CLIP, edgecolor="black",
+               linewidth=0.5, capsize=3)
+        ax.axhline(0, color="black", linewidth=0.6)
+        ax.axhline(0.005, color="red", linestyle="--", lw=0.5, alpha=0.5)
+        ax.axhline(-0.005, color="red", linestyle="--", lw=0.5, alpha=0.5)
+        ax.set_xticks(x); ax.set_xticklabels(strata_labels, fontsize=8)
+        ax.set_title(f"{vlbl} vs backbone-only", fontsize=10)
+        ax.grid(axis="y", linestyle=":", alpha=0.4)
+        ax.set_ylim(-0.06, 0.07)
+        if vi == 0:
+            ax.set_ylabel("Δ AUC (paired bootstrap, 95% CI)")
+            ax.legend(loc="upper left", fontsize=8, framealpha=0.95)
+    fig.suptitle("E21 — B4 vs CLIP hierarchical paired (subject+seed) bootstrap on Δ AUC, "
+                 "strict LODO CelebDF\nNo cell has CI excluding 0 except B4 +rPPG/full_fusion on rppg_snr_low_Q",
+                 fontsize=10)
+    fig.text(0.5, -0.02,
+             "Hierarchical paired bootstrap (N_BOOT=2000): each iteration resamples "
+             "subjects + seeds jointly. Source: outputs_and_cfgs/e21_v10_bundle/.",
+             ha="center", fontsize=8, style="italic")
+    plt.tight_layout()
+    plt.savefig(OUT / "fig18_e21_b4_vs_clip_paired.png", bbox_inches="tight", dpi=200)
+    plt.savefig(OUT / "fig18_e21_b4_vs_clip_paired.pdf", bbox_inches="tight")
+    plt.close()
+    print("[OK] fig18_e21_b4_vs_clip_paired")
+
+
 def fig17_e17_crosstab():
     """E17 cross-tab heatmap: rows = (variant, stratum), cells = net rescue.
     Diverging colormap: red = harmful, green = helpful."""
@@ -723,4 +798,5 @@ if __name__ == "__main__":
     fig15_evidence_matrix_v5()
     fig16_e16_quality_and_errors()
     fig17_e17_crosstab()
-    print("\nAll 8 corrected figures regenerated.")
+    fig18_e21_b4_vs_clip_paired()
+    print("\nAll 9 corrected figures regenerated.")
